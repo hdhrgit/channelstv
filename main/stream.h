@@ -23,6 +23,9 @@ stream_t *stream_open(const char *url, bool live);
 int stream_read(stream_t *s, uint8_t pkt[188], int timeout_ms);
 const char *stream_error(stream_t *s);
 bool stream_busy(stream_t *s); // failed because the bridge already runs all the conversions it allows
+// A time seek was asked for (a URL ending #npt=<seconds>-, sent as TimeSeekRange.dlna.org) and
+// the stream came without the answer naming its range: it plays from the top.
+bool stream_seek_ignored(stream_t *s);
 // Catching up with the live edge: the fetcher reads and throws away what the bridge has
 // waiting, as fast as Wi-Fi goes, until a read has to wait; the ring's unread bytes go too.
 // The reader then gets STREAM_CAUGHT_UP. Returns at once.

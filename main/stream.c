@@ -5,6 +5,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <strings.h>
 #include "esp_attr.h"
 #include "esp_heap_caps.h"
 #include "esp_http_client.h"
@@ -34,6 +35,9 @@ static volatile uint32_t s_connects, s_reconnects, s_busy;
 static volatile uint64_t s_bytes;
 static volatile int s_first_byte_ms;
 static char s_last_error[80];
+static char s_seek[24];               // the time seek the latest stream asked for ("npt=600-")
+static volatile bool s_seek_answered; // and whether its answer named the range
+static volatile int s_status;         // the latest connection's HTTP status
 static const char *volatile s_fstate = "idle";
 static volatile int s_fetchers; // fetcher tasks still alive (a closed one needs up to ~1 s)
 static volatile uint32_t s_fill;
@@ -44,6 +48,8 @@ static volatile uint32_t s_catchups, s_catch_bytes, s_catch_ms; // catch-ups, th
 // my_seg; the fetcher owns w, seg and seg_at. Both sides' 64-bit counters go through s_ring_mux.
 struct stream {
     char url[320];
+    char npt[24];             // "npt=600-": a DLNA time seek (TimeSeekRange.dlna.org), or empty
+    volatile bool npt_answered; // the answer carried TimeSeekRange.dlna.org: the seek was made
     bool live;                // endless: reconnect when it breaks; else it ends
     uint8_t *ring;
     uint64_t w, r;            // bytes written / read since opening
@@ -115,6 +121,17 @@ static int catch_up(stream_t *s, esp_http_client_handle_t c)
     return 0;
 }
 
+// A time seek's answer names the range served. A proxy that drops the request header (nginx
+// does: header names with dots are "invalid" to it) gets the stream from the top, without it.
+static esp_err_t on_http(esp_http_client_event_t *e)
+{
+    stream_t *s = e->user_data;
+    if (e->event_id == HTTP_EVENT_ON_HEADER && !strcasecmp(e->header_key, "TimeSeekRange.dlna.org")) {
+        s->npt_answered = s_seek_answered = true;
+    }
+    return ESP_OK;
+}
+
 static void fetcher_task(void *arg)
 {
     stream_t *s = arg;
@@ -123,8 +140,12 @@ static void fetcher_task(void *arg)
     int conn = 0;
     while (!s->quit && !s->failed && !s->ended) {
         esp_http_client_config_t cfg = {.url = s->url, .timeout_ms = CONNECT_TIMEOUT_MS, .buffer_size = 4096,
-                                        .buffer_size_tx = 512, .user_agent = USER_AGENT};
+                                        .buffer_size_tx = 512, .user_agent = USER_AGENT,
+                                        .event_handler = on_http, .user_data = s};
         esp_http_client_handle_t c = esp_http_client_init(&cfg);
+        if (c && s->npt[0]) {
+            esp_http_client_set_header(c, "TimeSeekRange.dlna.org", s->npt);
+        }
         int status = 0;
         int64_t t_conn = esp_timer_get_time();
         s_fstate = "connecting";
@@ -139,6 +160,7 @@ static void fetcher_task(void *arg)
             status = r == -ESP_ERR_HTTP_EAGAIN || r == ESP_FAIL ? 0 : esp_http_client_get_status_code(c);
         }
         s_connects++;
+        s_status = status;
         if (conn++ > 0) {
             s_reconnects++;
         }
@@ -287,6 +309,13 @@ stream_t *stream_open(const char *url, bool live)
     s_fill = 0;
     s_drop_now = false;
     strlcpy(s->url, url, sizeof(s->url));
+    char *seek = strstr(s->url, "#npt=");
+    if (seek) { // never sent: a fragment that asks for a time seek instead
+        strlcpy(s->npt, seek + 1, sizeof(s->npt));
+        *seek = '\0';
+    }
+    strlcpy(s_seek, s->npt, sizeof(s_seek));
+    s_seek_answered = false;
     s->live = live;
     s->ring = heap_caps_malloc(RING, MALLOC_CAP_SPIRAM);
     s->scratch = heap_caps_malloc(8192, MALLOC_CAP_SPIRAM);
@@ -375,6 +404,11 @@ void stream_catch_up(stream_t *s)
     s->catch_up = true;
 }
 
+bool stream_seek_ignored(stream_t *s)
+{
+    return s->npt[0] && s_first_byte_ms && !s->npt_answered;
+}
+
 bool stream_catching_up(stream_t *s)
 {
     return s->catch_up;
@@ -424,7 +458,9 @@ void stream_status_json(char *out, size_t len)
 {
     snprintf(out, len,
              "{\"connects\":%u,\"reconnects\":%u,\"busy\":%u,\"bytes\":%llu,\"first_byte_ms\":%d,\"state\":\"%s\","
-             "\"ring\":%u,\"catchups\":%u,\"catchup_bytes\":%u,\"catchup_ms\":%u,\"last_error\":\"%s\"}",
+             "\"ring\":%u,\"catchups\":%u,\"catchup_bytes\":%u,\"catchup_ms\":%u,\"last_error\":\"%s\","
+             "\"status\":%d,\"seek\":\"%s\",\"seek_answered\":%s}",
              (unsigned)s_connects, (unsigned)s_reconnects, (unsigned)s_busy, (unsigned long long)s_bytes, s_first_byte_ms,
-             s_fstate, (unsigned)s_fill, (unsigned)s_catchups, (unsigned)s_catch_bytes, (unsigned)s_catch_ms, s_last_error);
+             s_fstate, (unsigned)s_fill, (unsigned)s_catchups, (unsigned)s_catch_bytes, (unsigned)s_catch_ms, s_last_error,
+             s_status, s_seek, s_seek_answered ? "true" : "false");
 }

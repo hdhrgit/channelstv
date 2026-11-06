@@ -1183,6 +1183,11 @@ const char *tv_error(void)
     return s_error[0] ? s_error : s_draw_err;
 }
 
+bool tv_seek_ignored(void)
+{
+    return s_playing && s_src && stream_seek_ignored(s_src);
+}
+
 int tv_position_ms(void)
 {
     return s_media_ms;

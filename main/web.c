@@ -280,7 +280,6 @@ static esp_err_t seek(httpd_req_t *req)
     cJSON_AddBoolToObject(root, "seekable", at >= 0);
     cJSON_AddNumberToObject(root, "position_s", at);
     cJSON_AddNumberToObject(root, "duration_s", dur);
-    cJSON_AddBoolToObject(root, "bridge_seeks", bridge_can_seek());
     return send_json(req, root);
 }
 

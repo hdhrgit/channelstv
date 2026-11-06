@@ -689,16 +689,19 @@ static bool profile_toast(void)
 }
 
 // How a recording's stream is asked to start at_s seconds in: the one place that knows the
-// bridge's way of seeking (now ?t=<seconds> on the stream URL).
+// bridge's way of seeking. A DLNA time seek: stream.c turns the #npt= ending into a
+// TimeSeekRange.dlna.org: npt=<seconds>- request header.
 static void seek_request(char *url, size_t len, const char *base, int at_s)
 {
     strlcpy(url, base, len);
     if (at_s > 0) {
-        char t[16];
-        snprintf(t, sizeof(t), "%st=%d", strchr(base, '?') ? "&" : "?", at_s);
+        char t[24];
+        snprintf(t, sizeof(t), "#npt=%d-", at_s);
         strlcat(url, t, len);
     }
 }
+
+static bool s_offer_seek; // the item about to start is offered with time seek (play_entry)
 
 // at_s: where a recording starts, for a bridge that seeks
 static bool start_play(const char *url, const char *title, bool live, int at_s)
@@ -721,7 +724,7 @@ static bool start_play(const char *url, const char *title, bool live, int at_s)
     strlcpy(s_play_base, base, sizeof(s_play_base));
     strlcpy(s_play_title, name, sizeof(s_play_title));
     s_play_live = live;
-    s_seekable = !live && bridge_can_seek();
+    s_seekable = !live && s_offer_seek;
     s_play_at_s = s_seekable && at_s > 0 ? at_s : 0;
     s_seek_s = 0;
     seek_request(s_play_url, sizeof(s_play_url), base, s_play_at_s);
@@ -784,7 +787,8 @@ static void play_entry(const char *folder, int index, int total, const cd_entry_
     s_now_total = total;
     s_play_dur_s = e->live ? 0 : e->duration_s;
     strlcpy(s_play_id, e->live ? "" : e->id, sizeof(s_play_id));
-    start_play(e->url, e->title, e->live, e->live || !bridge_can_seek() ? 0 : resume_load(e->id, e->duration_s));
+    s_offer_seek = !e->live && e->time_seek;
+    start_play(e->url, e->title, e->live, s_offer_seek ? resume_load(e->id, e->duration_s) : 0);
 }
 
 // ---------------------------------------------------------------- playback controls
@@ -845,20 +849,23 @@ static void grid_locked(void *arg)
     make_overlays(s_play_title, s_play_live);
 }
 
-// Asks the bridge first whether it still seeks (it may have been changed since it was found):
-// one that doesn't would only start the recording again from the top. Then the controls go
-// back to volume keys instead.
+// Asks the bridge first whether it still offers the recording with time seek (its client
+// settings may have changed since the folder was read): one that doesn't would refuse the
+// seek. Then the controls go back to volume keys instead, and the recording plays on.
 static void seek_now(void)
 {
-    int to = seek_target();
+    int to = seek_target(), total = 0;
     s_seek_s = 0;
     overlay(NULL);
-    bridge_recheck_profiles();
-    if (!bridge_can_seek()) {
+    static EXT_RAM_BSS_ATTR cd_entry_t e; // off ctl_task's stack: browsing needs its room
+    bool offered = s_now_index >= 0 && bridge_browse(s_now_folder, s_now_index, 1, &e, &total) == 1 &&
+                   !strcmp(e.id, s_play_id) && e.time_seek;
+    if (!offered) {
         s_seekable = false;
         tv_call_locked(grid_locked, NULL);
         return;
     }
+    s_offer_seek = true;
     start_play(s_play_base, s_play_title, false, to);
 }
 
@@ -893,6 +900,12 @@ static void ctl_task(void *arg)
     ctl_t c;
     while (true) {
         if (!xQueueReceive(s_ctl, &c, pdMS_TO_TICKS(100))) {
+            if (s_play_at_s && tv_first_picture_ms() && tv_seek_ignored()) {
+                // a proxy on the way dropped the seek: it plays from the top, and can't seek
+                s_play_at_s = 0;
+                s_seekable = false;
+                tv_call_locked(grid_locked, NULL);
+            }
             resume_tick();
             if (s_seek_s && esp_timer_get_time() > s_seek_due) {
                 if (tv_playing() && s_seekable && !s_play_busy) {
@@ -1623,7 +1636,7 @@ void ui_start(void)
     xTaskCreateWithCaps(browse_task, "browse", 6144, NULL, 3, NULL, MALLOC_CAP_SPIRAM);
     // internal stack: the volume it sets is saved to NVS (flash), which a task with its stack
     // in PSRAM must not do
-    xTaskCreate(ctl_task, "tvctl", 4096, NULL, 4, NULL);
+    xTaskCreate(ctl_task, "tvctl", 8192, NULL, 4, NULL); // a seek browses the bridge first
 }
 
 bool ui_touch(const char *gesture, int x, int y)
@@ -1694,6 +1707,7 @@ bool ui_seek(int by_s, int *at_s, int *dur_s)
 bool ui_play(const char *url, const char *title, bool live)
 {
     s_now_index = -1; // from the web page: no folder to step through
+    s_offer_seek = false;
     s_play_dur_s = 0;
     s_play_id[0] = '\0';
     return start_play(url, title, live, 0);

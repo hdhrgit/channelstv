@@ -28,6 +28,8 @@ const char *tv_error(void);
 int tv_first_picture_ms(void); // from the start to the first picture, 0 if none yet
 // How far into the stream the picture is, from its first frame, in ms.
 int tv_position_ms(void);
+// The stream was asked to start part-way and came from the top instead (stream.h).
+bool tv_seek_ignored(void);
 // Runs fn(arg) in the decoder between two frames, which holds the LVGL lock while the picture
 // has the screen (to render an overlay with LVGL). Waits for it, up to a second; false if
 // nothing plays or the stream stalled. fn must be quick, and arg must outlive the call.

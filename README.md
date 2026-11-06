@@ -90,13 +90,15 @@ The setup page then offers **Back to <network>** for the one just forgotten.
   down / Info / channel up, volume down / Stop / volume up, Back / the title / Hide. Swipe up or
   down for the next or previous channel (the next or previous item of the folder), swipe right
   to stop.
-- **Recordings:** with a bridge that can start a recording part-way (seek support in the
-  bridge is coming), the controls' volume keys become ⏮ 30 s and ⏭ 30 s; the
+- **Recordings:** when the bridge offers a recording with DLNA time seek (its client is set to
+  seek by time, see [Bridge setup](#bridge-setup)), the controls' volume keys become ⏮ 30 s
+  and ⏭ 30 s; the
   volume stays on the VOL keys. Taps add up (three taps: 1:30) and the seek happens 0.8 s after
   the last one, showing where it lands ("+1:30", "→ 12:40 / 44:00"). Info shows how far the
   recording has got. A recording left part-way resumes there the next time it's played (the
-  place is kept in NVS; within its first 30 s or last minute it starts from the top). Without
-  seek support in the bridge, recordings play from the start to the end, as before.
+  place is kept in NVS; within its first 30 s or last minute it starts from the top). The board
+  asks for the start with a `TimeSeekRange.dlna.org: npt=<seconds>-` request header. A
+  recording offered without time seek plays from the start to the end.
 - **Settings:** Touch test (tap five dots; the board works out how the touch panel lines up with
   the screen and keeps it), the picture shape (16:9 or the centre 4:3), Rotation, Find the
   bridge again, About.
@@ -159,12 +161,12 @@ sends it back:
 BRIDGE=http://<bridge-host>:8200
 curl -s $BRIDGE/api/state | jq --argjson new '[
   {"name": "esp32", "user_agents": ["channelstv"],
-   "profile": {"mode": "transcode", "ads": "cut",
+   "profile": {"mode": "transcode", "ads": "cut", "seek": "time",
      "transcode": {"max_width": 240, "max_height": 144, "fps": 24, "video_kbps": 250,
        "audio_kbps": 64, "audio_channels": 1, "h264_profile": "baseline",
        "pre_scale": true, "exact_size": true, "single_slice": true}}},
   {"name": "esp32_4x3",
-   "profile": {"mode": "transcode", "ads": "cut",
+   "profile": {"mode": "transcode", "ads": "cut", "seek": "time",
      "transcode": {"max_width": 240, "max_height": 192, "fps": 24, "video_kbps": 250,
        "audio_kbps": 64, "audio_channels": 1, "h264_profile": "baseline",
        "pre_scale": true, "exact_size": true, "crop": "4:3", "single_slice": true}}}
@@ -173,7 +175,9 @@ curl -s -X PUT -H 'Content-Type: application/json' --data-binary @- $BRIDGE/api/
 ```
 
 Then tap **Find the bridge again** in Settings (or restart the board) so it checks again.
-`"ads": "cut"` plays recordings without their ads; leave it out to keep them.
+`"ads": "cut"` plays recordings without their ads; leave it out to keep them. `"seek": "time"`
+offers recordings with DLNA time seek, for the board's 30 s keys and resume (on the settings
+page: Seeking, by time); with `"bytes"` they play from the start to the end.
 
 ## Building
 
