@@ -198,6 +198,75 @@ static void backlight_init(void)
     ledc_channel_config(&ch);
 }
 
+// ---------------------------------------------------------------- touch calibration
+
+// Raw points from the CST816 become screen points through the calibration: an axis swap, then
+// screen = a * raw + b on each axis. The last points seen are kept, raw and mapped, for the
+// web API.
+static touch_cal_t s_cal = {.ax = 1, .ay = 1};
+static touch_log_t s_tlog[TOUCH_LOG_N];
+static int s_tlog_n;
+static bool s_tdown;
+static int s_traw_x = -1, s_traw_y = -1;
+static portMUX_TYPE s_tmux = portMUX_INITIALIZER_UNLOCKED;
+
+static void touch_map(esp_lcd_touch_handle_t tp, uint16_t *x, uint16_t *y, uint16_t *strength, uint8_t *point_num,
+                      uint8_t max_point_num)
+{
+    bool down = *point_num > 0;
+    if (down) {
+        int rx = x[0], ry = y[0];
+        float u = s_cal.swap ? ry : rx, v = s_cal.swap ? rx : ry;
+        int mx = (int)(s_cal.ax * u + s_cal.bx + 0.5f), my = (int)(s_cal.ay * v + s_cal.by + 0.5f);
+        mx = mx < 0 ? 0 : mx >= LCD_W ? LCD_W - 1 : mx;
+        my = my < 0 ? 0 : my >= LCD_H ? LCD_H - 1 : my;
+        x[0] = mx;
+        y[0] = my;
+        portENTER_CRITICAL(&s_tmux);
+        if (rx != s_traw_x || ry != s_traw_y || !s_tdown) {
+            touch_log_t *l = &s_tlog[s_tlog_n++ % TOUCH_LOG_N];
+            *l = (touch_log_t){.ms = esp_timer_get_time() / 1000, .raw_x = rx, .raw_y = ry, .x = mx, .y = my, .down = true};
+        }
+        s_traw_x = rx;
+        s_traw_y = ry;
+        portEXIT_CRITICAL(&s_tmux);
+    } else if (s_tdown) {
+        portENTER_CRITICAL(&s_tmux);
+        touch_log_t *l = &s_tlog[s_tlog_n++ % TOUCH_LOG_N];
+        *l = (touch_log_t){.ms = esp_timer_get_time() / 1000, .raw_x = s_traw_x, .raw_y = s_traw_y, .x = -1, .y = -1};
+        portEXIT_CRITICAL(&s_tmux);
+    }
+    s_tdown = down;
+}
+
+void board_touch_cal(touch_cal_t *out)
+{
+    *out = s_cal;
+}
+
+void board_touch_set_cal(const touch_cal_t *cal)
+{
+    s_cal = *cal;
+}
+
+bool board_touch_raw(int *x, int *y)
+{
+    *x = s_traw_x;
+    *y = s_traw_y;
+    return s_traw_x >= 0;
+}
+
+int board_touch_log(touch_log_t *out, int max)
+{
+    portENTER_CRITICAL(&s_tmux);
+    int n = s_tlog_n < TOUCH_LOG_N ? s_tlog_n : TOUCH_LOG_N, k = 0;
+    for (int i = s_tlog_n - n; i < s_tlog_n && k < max; i++) {
+        out[k++] = s_tlog[i % TOUCH_LOG_N];
+    }
+    portEXIT_CRITICAL(&s_tmux);
+    return k;
+}
+
 static void lcd_init(void)
 {
     spi_bus_config_t bus = {
@@ -242,6 +311,7 @@ static void lcd_init(void)
         .y_max = LCD_H,
         .rst_gpio_num = PIN_TP_RST,
         .int_gpio_num = PIN_TP_INT,
+        .process_coordinates = touch_map,
     };
     if (esp_lcd_touch_new_i2c_cst816s(tp_io, &tp, &s_touch) != ESP_OK) {
         ESP_LOGE(TAG, "touch failed");

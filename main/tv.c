@@ -75,16 +75,69 @@ static int s_first_ms;               // from then to the first picture on the sc
 static int64_t s_late_sum_ms;        // shown frames: how far the clock was past their time
 static int s_late_max_ms;
 
-static bool touched(void)
+// Where a finger is now, on the screen; false if none.
+static bool touch_point(int *x, int *y)
 {
     esp_lcd_touch_handle_t tp = board_touch();
     if (!tp) {
         return false;
     }
-    uint16_t x, y;
+    esp_lcd_touch_point_data_t pt;
     uint8_t n = 0;
     esp_lcd_touch_read_data(tp);
-    return esp_lcd_touch_get_coordinates(tp, &x, &y, NULL, &n, 1) && n > 0;
+    if (esp_lcd_touch_get_data(tp, &pt, &n, 1) != ESP_OK || n == 0) {
+        return false;
+    }
+    *x = pt.x;
+    *y = pt.y;
+    return true;
+}
+
+// Taps and swipes from the points the draw task samples. A swipe moves more than SWIPE_PX
+// within SWIPE_MS; a tap moves less than TAP_PX; anything else (a slow drag) is nothing.
+#define SWIPE_PX 40
+#define SWIPE_MS 600
+#define TAP_PX   20
+static tv_touch_fn s_touch_fn;
+typedef struct {
+    bool down, armed;
+    int x0, y0, x, y;
+    int64_t t0;
+} gesture_t;
+
+static void gesture_step(gesture_t *g)
+{
+    int x, y;
+    bool down = touch_point(&x, &y);
+    if (down && !g->down) {
+        g->x0 = g->x = x;
+        g->y0 = g->y = y;
+        g->t0 = esp_timer_get_time();
+    } else if (down) {
+        g->x = x;
+        g->y = y;
+    } else if (g->down && g->armed) {
+        int dx = g->x - g->x0, dy = g->y - g->y0, adx = abs(dx), ady = abs(dy);
+        int ms = (esp_timer_get_time() - g->t0) / 1000;
+        tv_touch_t what = TV_NONE;
+        if ((adx > SWIPE_PX || ady > SWIPE_PX) && ms < SWIPE_MS) {
+            what = adx > ady ? (dx > 0 ? TV_SWIPE_RIGHT : TV_SWIPE_LEFT) : (dy > 0 ? TV_SWIPE_DOWN : TV_SWIPE_UP);
+        } else if (adx < TAP_PX && ady < TAP_PX) {
+            what = TV_TAP;
+        }
+        if (what != TV_NONE) {
+            if (s_touch_fn) {
+                s_touch_fn(what, g->x0, g->y0);
+            } else if (what == TV_TAP) {
+                s_why = "tap";
+                s_stop = true;
+            }
+        }
+    }
+    if (!down) {
+        g->armed = true; // the finger that started playback has to lift first
+    }
+    g->down = down;
 }
 
 #define STRIP_LINES 20 // LVGL's draw buffers are LCD_W x 20
@@ -111,6 +164,15 @@ static void draw_frame(esp_lcd_panel_handle_t panel, uint16_t *strip[2], const u
         if (err != ESP_OK && !s_draw_err[0]) {
             snprintf(s_draw_err, sizeof(s_draw_err), "draw row %d: %s", row, esp_err_to_name(err));
         }
+    }
+}
+
+// A full-screen RGB565 image (panel byte order, in PSRAM) through the internal-RAM strips.
+static void draw_rgb(esp_lcd_panel_handle_t panel, uint16_t *strip[2], const uint16_t *img)
+{
+    for (int y = 0, k = 0; y < LCD_H; y += STRIP_LINES, k ^= 1) {
+        memcpy(strip[k], img + y * LCD_W, LCD_W * STRIP_LINES * 2);
+        esp_lcd_panel_draw_bitmap(panel, 0, y, LCD_W, y + STRIP_LINES, strip[k]);
     }
 }
 
@@ -160,6 +222,8 @@ static volatile bool s_banner_want;             // "Catching up..." under the pi
 static uint16_t *s_banner;                      // panel-order RGB565, LCD_W x BANNER_H, in PSRAM
 #define BANNER_H 20
 static const char *volatile s_drstate = ""; // where the draw task is (debug)
+static const uint16_t *volatile s_overlay;  // drawn over the whole screen instead of the picture
+static volatile bool s_overlay_dirty;
 // /api/screen asks the draw task for a copy of the next frame it draws (nothing happens when
 // nobody asks): the I420 picture goes into s_cap, allocated on first use.
 static uint8_t *s_cap;
@@ -170,14 +234,14 @@ static void draw_task(void *arg)
 {
     esp_lcd_panel_handle_t panel = board_lcd_panel();
     int64_t t0 = esp_timer_get_time(), draw_us = 0;
-    int touch_div = 0, touch_count = 0;
-    bool touch_armed = false;
+    gesture_t g = {0};
+    bool overlay_on = false;
     frame_t fr;
     bool banner_on = false;
     uint16_t *banner_dma = NULL; // freed a frame after its last use: by then the panel has it
     int banner_age = 0;
     while ((s_drstate = "waiting", xQueueReceive(s_full_q, &fr, portMAX_DELAY)) && fr.buf != FR_END) {
-        if (s_banner && banner_on != s_banner_want && s_pic_h && (LCD_H - s_pic_h) / 2 >= BANNER_H) {
+        if (s_banner && !overlay_on && banner_on != s_banner_want && s_pic_h && (LCD_H - s_pic_h) / 2 >= BANNER_H) {
             if (!banner_dma) {
                 banner_dma = heap_caps_malloc(LCD_W * BANNER_H * 2, MALLOC_CAP_DMA | MALLOC_CAP_INTERNAL);
             }
@@ -197,9 +261,24 @@ static void draw_task(void *arg)
             heap_caps_free(banner_dma);
             banner_dma = NULL;
         }
+        if (s_overlay_dirty) {
+            s_overlay_dirty = false;
+            const uint16_t *ov = s_overlay;
+            overlay_on = ov != NULL;
+            s_drstate = "overlay";
+            if (ov) {
+                draw_rgb(panel, s_strip, ov);
+            } else {
+                memset(s_strip[0], 0, LCD_W * STRIP_LINES * 2); // black around the picture again
+                for (int y = 0; y < LCD_H; y += STRIP_LINES) {
+                    esp_lcd_panel_draw_bitmap(panel, 0, y, LCD_W, y + STRIP_LINES, s_strip[0]);
+                }
+                esp_lcd_panel_draw_bitmap(panel, 0, 0, 1, 1, s_strip[1]); // the black strip has left
+                banner_on = false;
+            }
+        }
         if (fr.buf == FR_IDLE) {
-            touch_div = 3; // waiting for the stream: only look for a tap
-            goto touch;
+            goto touch; // waiting for the stream: only look for a touch
         }
         int64_t now_ms = clock_ms(&s_clk);
         // the sound is held back until the first frame is up: that one has no clock to wait for
@@ -212,7 +291,9 @@ static void draw_task(void *arg)
         if (!s_stop && (now_ms <= fr.due_ms + s_frame_us / 1000 || first)) {
             int64_t a = esp_timer_get_time();
             s_drstate = "drawing";
-            draw_frame(panel, s_strip, s_fb[fr.buf], fr.w, fr.h);
+            if (!overlay_on) {
+                draw_frame(panel, s_strip, s_fb[fr.buf], fr.w, fr.h);
+            }
             int64_t b = esp_timer_get_time();
             draw_us += b - a;
             s_shown++;
@@ -236,17 +317,8 @@ static void draw_task(void *arg)
         }
         xQueueSend(s_free_q, &fr.buf, portMAX_DELAY);
     touch:
-        if (++touch_div >= 4) { // ~6 checks a second at 24 fps
-            touch_div = 0;
-            s_drstate = "touch";
-            bool t = touched();
-            touch_count = t ? touch_count + 1 : 0;
-            if (touch_count >= 2 && touch_armed) { // two checks in a row (~1/3 s): a real touch
-                s_why = "tap";
-                s_stop = true;
-            }
-            touch_armed |= !t; // the finger that started it has to lift first
-        }
+        s_drstate = "touch";
+        gesture_step(&g); // every frame (~24 a second): a swipe is over in a few of them
     }
     // one more window command makes sure the last strip left its buffer
     s_drstate = "ending";
@@ -948,6 +1020,8 @@ bool tv_play(const char *url, const char *title, bool live)
     s_cc_errors = s_packets = s_au_bytes = 0;
     s_lat_ms = s_lat_min_ms = 0;
     s_trim = s_banner_want = false;
+    s_overlay = NULL;
+    s_overlay_dirty = false;
     s_trimmed_ms = s_catchups = s_catch_skipped_ms = 0;
     s_catch_epoch = -1;
     s_preroll_done = false;
@@ -1014,6 +1088,19 @@ void tv_init(void)
     if (d && d->buf_1 && d->buf_2 && d->buf_1->data_size >= LCD_W * STRIP_LINES * 2) {
         s_strip[0] = (uint16_t *)d->buf_1->data;
         s_strip[1] = (uint16_t *)d->buf_2->data;
+    }
+}
+
+void tv_set_touch_handler(tv_touch_fn fn)
+{
+    s_touch_fn = fn;
+}
+
+void tv_overlay(const uint16_t *img)
+{
+    if (img != s_overlay) {
+        s_overlay = img;
+        s_overlay_dirty = true;
     }
 }
 

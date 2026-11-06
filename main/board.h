@@ -27,6 +27,24 @@ typedef struct {
     bool usb;        // a USB host is talking to us, or we are charging
 } battery_t;
 
+// Touch calibration: screen = a * raw + b per axis, after swapping the raw axes if swap.
+typedef struct {
+    bool swap;
+    float ax, bx, ay, by;
+} touch_cal_t;
+void board_touch_cal(touch_cal_t *out);
+void board_touch_set_cal(const touch_cal_t *cal);
+// The latest raw point the touch chip reported; false if none yet.
+bool board_touch_raw(int *x, int *y);
+// The last touch points, raw and mapped, oldest first: a press or a move (down), or a lift.
+#define TOUCH_LOG_N 16
+typedef struct {
+    uint32_t ms;
+    int16_t raw_x, raw_y, x, y;
+    bool down;
+} touch_log_t;
+int board_touch_log(touch_log_t *out, int max);
+
 // Keeps the board powered on battery, then brings up I2C, the codec and the LCD.
 void board_init(void);
 esp_codec_dev_handle_t board_speaker(void);

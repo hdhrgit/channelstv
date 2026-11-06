@@ -18,6 +18,10 @@ void ui_backlight_full(void);
 // The power-off countdown while PWR is held: held_ms of 3000 shows "Powering off",
 // 0 hides it. Safe from any task.
 void ui_power_hold(int held_ms);
+// A touch as the screen would take it (/api/touch): gesture "tap", "long", "up", "down", "left"
+// or "right", at x, y. While something plays it goes to the playback controls. False if the
+// gesture is unknown or the screen was busy.
+bool ui_touch(const char *gesture, int x, int y);
 // Plays a stream the way a tap on an item does (/api/play). False if another start is
 // still under way.
 bool ui_play(const char *url, const char *title, bool live);

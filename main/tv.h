@@ -26,5 +26,13 @@ int tv_first_picture_ms(void); // from the start to the first picture, 0 if none
 // /api/screen. NULL if no picture is up or none came within timeout_ms. The buffer stays
 // valid until the next call; call from one task only.
 const uint8_t *tv_capture(int *w, int *h, int timeout_ms);
+// Touches while the picture has the screen, from the draw task (keep the handler short). Without
+// a handler a tap stops playback.
+typedef enum { TV_NONE, TV_TAP, TV_SWIPE_UP, TV_SWIPE_DOWN, TV_SWIPE_LEFT, TV_SWIPE_RIGHT } tv_touch_t;
+typedef void (*tv_touch_fn)(tv_touch_t what, int x, int y);
+void tv_set_touch_handler(tv_touch_fn fn);
+// A full-screen image (RGB565 in the panel's byte order, kept by the caller) drawn instead of
+// the picture until tv_overlay(NULL); the sound and the decoding go on underneath.
+void tv_overlay(const uint16_t *img);
 // {"title":..,"playing":..,"live":..,"fps":..,"shown":..,"dropped":..,...,"source":{...}}
 void tv_status_json(char *out, size_t len);

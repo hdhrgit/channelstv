@@ -84,6 +84,32 @@ static esp_err_t page(httpd_req_t *req)
     return httpd_resp_sendstr(req, index_html);
 }
 
+// The calibration and the last touch points, raw and mapped.
+static void add_touch(cJSON *root)
+{
+    cJSON *t = cJSON_AddObjectToObject(root, "touch");
+    touch_cal_t c;
+    board_touch_cal(&c);
+    cJSON *cal = cJSON_AddObjectToObject(t, "calibration");
+    cJSON_AddBoolToObject(cal, "swap", c.swap);
+    cJSON_AddNumberToObject(cal, "ax", c.ax);
+    cJSON_AddNumberToObject(cal, "bx", c.bx);
+    cJSON_AddNumberToObject(cal, "ay", c.ay);
+    cJSON_AddNumberToObject(cal, "by", c.by);
+    touch_log_t log[TOUCH_LOG_N];
+    int n = board_touch_log(log, TOUCH_LOG_N);
+    cJSON *pts = cJSON_AddArrayToObject(t, "points"); // [ms, raw x, raw y, x, y]; x = -1: lifted
+    for (int i = 0; i < n; i++) {
+        cJSON *p = cJSON_CreateArray();
+        cJSON_AddItemToArray(p, cJSON_CreateNumber(log[i].ms));
+        cJSON_AddItemToArray(p, cJSON_CreateNumber(log[i].raw_x));
+        cJSON_AddItemToArray(p, cJSON_CreateNumber(log[i].raw_y));
+        cJSON_AddItemToArray(p, cJSON_CreateNumber(log[i].x));
+        cJSON_AddItemToArray(p, cJSON_CreateNumber(log[i].y));
+        cJSON_AddItemToArray(pts, p);
+    }
+}
+
 static esp_err_t status(httpd_req_t *req)
 {
     cJSON *root = cJSON_CreateObject();
@@ -114,6 +140,7 @@ static esp_err_t status(httpd_req_t *req)
     cJSON_AddNumberToObject(ram, "lowest", heap_caps_get_minimum_free_size(MALLOC_CAP_INTERNAL));
     cJSON_AddNumberToObject(root, "volume", app_volume());
     cJSON_AddStringToObject(root, "sound", player_state());
+    add_touch(root);
     char *buf = malloc(2048);
     if (buf) {
         bridge_status_json(buf, 2048);
@@ -199,6 +226,19 @@ static esp_err_t stop(httpd_req_t *req)
 {
     tv_stop();
     return send_raw_json(req, "{\"ok\":true}");
+}
+
+// ?gesture=tap|long|up|down|left|right&x=..&y=.. acts as a finger would; reports the last
+// touch points either way.
+static esp_err_t touch(httpd_req_t *req)
+{
+    char g[12];
+    cJSON *root = cJSON_CreateObject();
+    if (query_str(req, "gesture", g, sizeof(g))) {
+        cJSON_AddBoolToObject(root, "ok", ui_touch(g, query_int(req, "x", LCD_W / 2), query_int(req, "y", LCD_H / 2)));
+    }
+    add_touch(root);
+    return send_json(req, root);
 }
 
 static esp_err_t tv(httpd_req_t *req)
@@ -354,6 +394,7 @@ void web_start(void)
         {.uri = "/api/play", .method = HTTP_GET, .handler = play},
         {.uri = "/api/stop", .method = HTTP_GET, .handler = stop},
         {.uri = "/api/tv", .method = HTTP_GET, .handler = tv},
+        {.uri = "/api/touch", .method = HTTP_GET, .handler = touch},
         {.uri = "/api/screen", .method = HTTP_GET, .handler = screen},
         {.uri = "/api/ota", .method = HTTP_POST, .handler = ota},
     };

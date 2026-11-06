@@ -1,10 +1,18 @@
 // LVGL screens, see ui.h. Everything here runs in the LVGL task, apart from the public calls
 // that take the port lock. Browsing goes over the network, so a worker task does it and the
 // refresh timer shows what came back.
+//
+// Made for fingers on a 1.54" screen: four rows a page, each the full width and 50 px tall,
+// under a slim heading. Swipe up / down for the next / previous page, swipe right (or tap the
+// heading's left end) to go back, tap a row to open or play it. A long press on Live TV opens a
+// number pad. One object over the whole screen takes every touch and works out what it was from
+// the points: a swipe moves over SWIPE_PX within SWIPE_MS, a tap less than TAP_PX.
 
 #include "ui.h"
 
+#include <math.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 #include "esp_heap_caps.h"
 #include "esp_lvgl_port.h"
@@ -13,6 +21,7 @@
 #include "freertos/queue.h"
 #include "freertos/task.h"
 #include "lvgl.h"
+#include "nvs.h"
 
 #include "app.h"
 #include "board.h"
@@ -21,6 +30,7 @@
 
 #define C_BG     0x0f1216
 #define C_PANEL  0x1c2229
+#define C_PRESS  0x2c3a48
 #define C_TEXT   0xe8eaed
 #define C_DIM    0x8a939c
 #define C_ACCENT 0x4fc3f7
@@ -33,8 +43,17 @@
 #define DIM_AFTER_MS 60000  // on battery, the screen dims after this long untouched ...
 #define OFF_AFTER_MS 300000 // ... and goes dark after this (a touch or a key brings it back)
 
-#define PAGE  12 // entries a page
-#define DEPTH 8  // folders deep
+#define HEAD_H   32
+#define ROWS     4                          // rows a page
+#define ROW_H    ((LCD_H - HEAD_H) / ROWS)  // 52
+#define BACK_W   60                         // the heading's left end goes back
+#define DEPTH    8                          // folders deep
+#define SWIPE_PX 40
+#define SWIPE_MS 600
+#define TAP_PX   20
+#define OVERLAY_MS 4000                     // the playback controls hide after this
+#define SETTINGS_ID "#settings"
+#define NVS_NS   "channelstv"
 
 // LVGL's heap (CONFIG_LV_USE_CUSTOM_MALLOC): PSRAM. Through plain malloc its small blocks (widgets,
 // labels, and the glyph caches of every font size) all went to internal RAM and grew with every
@@ -64,13 +83,20 @@ void lv_free_core(void *p)
 extern const uint8_t ttf_start[] asm("_binary_DejaVuSans_ttf_start");
 extern const uint8_t ttf_end[] asm("_binary_DejaVuSans_ttf_end");
 
-static lv_font_t *f14, *f18, *f22;
-static lv_obj_t *s_back, *s_head, *s_wifi, *s_batt;
-static lv_obj_t *s_list;
+typedef enum { VIEW_LIST, VIEW_PAD, VIEW_CAL } view_t;
+typedef enum { G_NONE, G_TAP, G_LONG, G_UP, G_DOWN, G_LEFT, G_RIGHT } gesture_t;
+
+static lv_font_t *f14, *f18, *f22, *f28;
+static lv_obj_t *s_head_back, *s_head, *s_pageno, *s_wifi;
+static lv_obj_t *s_row[ROWS], *s_row_icon[ROWS], *s_row_text[ROWS];
+static lv_obj_t *s_note;       // a message in place of the rows
+static lv_obj_t *s_pad;        // the number pad's grid
+static lv_obj_t *s_cal;        // the touch test's target
+static lv_obj_t *s_catch;      // over everything: takes every touch
 static lv_obj_t *s_toast;
 static int64_t s_toast_until;
 static lv_obj_t *s_power, *s_power_arc, *s_power_lbl;
-static lv_style_t s_btn_style;
+static view_t s_view = VIEW_LIST;
 
 // Where the screen is: a stack of folders, the top one shown a page at a time.
 typedef struct {
@@ -82,23 +108,36 @@ static EXT_RAM_BSS_ATTR level_t s_stack[DEPTH];
 static int s_depth = 1; // s_stack[0] is the top ("0")
 static volatile bool s_back_wanted;
 
-// What the worker brought back for the folder shown.
+// What the worker brought back for the page shown.
 typedef struct {
     char id[80];
     int start;
 } request_t;
 static QueueHandle_t s_requests;
-static EXT_RAM_BSS_ATTR cd_entry_t s_entries[PAGE];
+static EXT_RAM_BSS_ATTR cd_entry_t s_entries[ROWS];
 static volatile int s_count = -2;   // -2 loading, -1 failed
-static volatile int s_total;
+static volatile int s_total;        // entries in the folder, the settings row included at the top
 static volatile unsigned s_result_gen, s_shown_gen;
-static unsigned s_req_gen;          // bumped by each request: older answers are dropped
+static volatile unsigned s_req_gen; // bumped by each request: older answers are dropped
 static unsigned s_bridge_gen = ~0u;
 static bridge_state_t s_bridge_state = (bridge_state_t)-1;
+
+// the touch now under way
+static int s_t_x0, s_t_y0, s_t_x, s_t_y;
+static int64_t s_t_t0;
+static bool s_t_long;   // a long press was taken: its release is nothing more
+static int s_pressed_row = -1;
+
+static char s_digits[12]; // typed on the number pad
+static int s_cal_step;
+static int s_cal_raw[5][2];
+static const int s_cal_at[5][2] = {{30, 30}, {210, 30}, {210, 210}, {30, 210}, {120, 120}};
 
 static bool s_dimmed, s_screen_off;
 static battery_t s_bat;
 static int64_t s_bat_at;
+
+static void rebuild(void);
 
 static lv_font_t *ttf(int size)
 {
@@ -106,7 +145,7 @@ static lv_font_t *ttf(int size)
     if (!f) {
         return (lv_font_t *)&lv_font_montserrat_14;
     }
-    // LVGL's symbols (wifi, battery, play) live in the built-in Montserrat fonts
+    // LVGL's symbols (wifi, folder, play) live in the built-in Montserrat fonts
     f->fallback = size >= 20 ? &lv_font_montserrat_20 : &lv_font_montserrat_14;
     return f;
 }
@@ -120,19 +159,16 @@ static lv_obj_t *label(lv_obj_t *parent, const lv_font_t *font, uint32_t color)
     return l;
 }
 
-static lv_obj_t *round_btn(lv_obj_t *parent, int size, const char *sym, uint32_t bg, lv_event_cb_t cb, int arg)
+static lv_obj_t *box(lv_obj_t *parent, int x, int y, int w, int h, uint32_t bg)
 {
-    lv_obj_t *b = lv_button_create(parent);
-    lv_obj_set_size(b, size, size);
-    lv_obj_set_style_radius(b, LV_RADIUS_CIRCLE, 0);
+    lv_obj_t *b = lv_obj_create(parent);
+    lv_obj_remove_style_all(b);
+    lv_obj_set_pos(b, x, y);
+    lv_obj_set_size(b, w, h);
     lv_obj_set_style_bg_color(b, lv_color_hex(bg), 0);
-    lv_obj_set_style_shadow_width(b, 0, 0);
-    lv_obj_add_event_cb(b, cb, LV_EVENT_CLICKED, (void *)(intptr_t)arg);
-    lv_obj_t *l = lv_label_create(b);
-    lv_obj_set_style_text_font(l, &lv_font_montserrat_20, 0);
-    lv_obj_set_style_text_color(l, lv_color_hex(C_TEXT), 0);
-    lv_label_set_text(l, sym);
-    lv_obj_center(l);
+    lv_obj_set_style_bg_opa(b, LV_OPA_COVER, 0);
+    lv_obj_set_style_radius(b, 8, 0);
+    lv_obj_remove_flag(b, LV_OBJ_FLAG_CLICKABLE | LV_OBJ_FLAG_SCROLLABLE);
     return b;
 }
 
@@ -152,6 +188,13 @@ static void lcolor(lv_obj_t *o, uint32_t hex)
     }
 }
 
+static void show(lv_obj_t *o, bool on)
+{
+    if (on == lv_obj_has_flag(o, LV_OBJ_FLAG_HIDDEN)) {
+        on ? lv_obj_remove_flag(o, LV_OBJ_FLAG_HIDDEN) : lv_obj_add_flag(o, LV_OBJ_FLAG_HIDDEN);
+    }
+}
+
 static void toast(const char *text, int ms)
 {
     lv_label_set_text(s_toast, text);
@@ -161,9 +204,29 @@ static void toast(const char *text, int ms)
 
 // ---------------------------------------------------------------- browsing
 
+static bool at_settings(void)
+{
+    return !strcmp(s_stack[s_depth - 1].id, SETTINGS_ID);
+}
+
+static void settings_rows(void)
+{
+    static const char *const titles[] = {"Touch test", "Picture", "Find the bridge again", "About"};
+    for (int i = 0; i < ROWS; i++) {
+        memset(&s_entries[i], 0, sizeof(s_entries[i]));
+        snprintf(s_entries[i].id, sizeof(s_entries[i].id), "#set%d", i);
+        strlcpy(s_entries[i].title, titles[i], sizeof(s_entries[i].title));
+    }
+    snprintf(s_entries[1].title, sizeof(s_entries[1].title), "Picture: %s",
+             !strcmp(bridge_profile(), "esp32_4x3") ? "4:3 centre" : "16:9");
+    s_count = ROWS;
+    s_total = ROWS;
+}
+
+// The top folder lists the bridge's folders and, after them, Settings.
 static void browse_task(void *arg)
 {
-    static EXT_RAM_BSS_ATTR cd_entry_t fresh[PAGE];
+    static EXT_RAM_BSS_ATTR cd_entry_t fresh[ROWS];
     request_t req;
     while (true) {
         xQueueReceive(s_requests, &req, portMAX_DELAY);
@@ -172,7 +235,19 @@ static void browse_task(void *arg)
             continue; // a newer one is waiting: that's the one to answer
         }
         int total = 0;
-        int n = bridge_browse(req.id, req.start, PAGE, fresh, &total);
+        int n = bridge_browse(req.id, req.start, ROWS, fresh, &total);
+        bool top = !strcmp(req.id, "0");
+        if (top && n >= 0 && req.start + n >= total && n < ROWS) {
+            cd_entry_t *e = &fresh[n++];
+            memset(e, 0, sizeof(*e));
+            strcpy(e->id, SETTINGS_ID);
+            strcpy(e->title, "Settings");
+            e->container = true;
+            e->children = -1;
+        }
+        if (top && n >= 0) {
+            total++;
+        }
         if (gen != s_req_gen) {
             continue; // the screen moved on meanwhile
         }
@@ -192,10 +267,15 @@ static void browse_task(void *arg)
 static void request_page(void)
 {
     level_t *lv = &s_stack[s_depth - 1];
+    s_req_gen++;
+    if (at_settings()) {
+        settings_rows();
+        s_result_gen++;
+        return;
+    }
     request_t req;
     strlcpy(req.id, lv->id, sizeof(req.id));
-    req.start = lv->page * PAGE;
-    s_req_gen++;
+    req.start = lv->page * ROWS;
     s_count = -2;
     s_result_gen++;
     xQueueSend(s_requests, &req, 0);
@@ -215,10 +295,25 @@ static void open_folder(const cd_entry_t *e)
 
 static void go_back(void)
 {
-    if (s_depth > 1) {
+    if (s_view != VIEW_LIST) {
+        s_view = VIEW_LIST;
+        s_result_gen++;
+    } else if (s_depth > 1) {
         s_depth--;
         request_page();
     }
+}
+
+static void turn_page(int dir)
+{
+    level_t *lv = &s_stack[s_depth - 1];
+    int pages = (s_total + ROWS - 1) / ROWS;
+    if (pages <= 1 || s_count < 0) {
+        return;
+    }
+    int p = lv->page + dir;
+    lv->page = p < 0 ? pages - 1 : p >= pages ? 0 : p;
+    request_page();
 }
 
 // ---------------------------------------------------------------- playing
@@ -229,6 +324,14 @@ static lv_obj_t *s_tune, *s_tune_secs;
 static volatile bool s_play_busy; // a start (which can take seconds over the network) is under way
 static char s_play_url[256], s_play_title[96];
 static bool s_play_live;
+// what plays, for channel up / down: its folder and place in it
+static char s_now_folder[80];
+static int s_now_index = -1, s_now_total;
+// the playback controls: a 3x3 grid drawn over the picture, and the item's details
+static uint16_t *s_ov_grid, *s_ov_info;
+static volatile int64_t s_ov_until;
+static volatile const uint16_t *s_ov_shown;
+static QueueHandle_t s_ctl;
 
 static void on_tune_tap(lv_event_t *e)
 {
@@ -257,7 +360,7 @@ static void tuning_show(const char *title)
     lv_obj_set_style_arc_color(spin, lv_color_hex(C_PANEL), LV_PART_MAIN);
     lv_obj_set_style_arc_color(spin, lv_color_hex(C_ACCENT), LV_PART_INDICATOR);
     lv_obj_t *name = label(s_tune, f18, C_TEXT);
-    lv_obj_set_width(name, LCD_W - 20);
+    lv_obj_set_size(name, LCD_W - 20, 24);
     lv_obj_set_style_text_align(name, LV_TEXT_ALIGN_CENTER, 0);
     lv_label_set_long_mode(name, LV_LABEL_LONG_DOT);
     lv_label_set_text(name, title);
@@ -277,20 +380,13 @@ static void tuning_seconds(int s)
     }
 }
 
-uint16_t *ui_banner(const char *text, int w, int h)
+// An object made off to the side, as the panel takes it (RGB565, bytes swapped), in PSRAM.
+// Deleted before LVGL draws again, so it never shows on the screen itself.
+static uint16_t *render(lv_obj_t *obj, int w, int h)
 {
-    // made and deleted before LVGL draws again, so it never shows on the screen itself
-    lv_obj_t *box = lv_obj_create(lv_screen_active());
-    lv_obj_remove_style_all(box);
-    lv_obj_set_size(box, w, h);
-    lv_obj_set_style_bg_color(box, lv_color_black(), 0);
-    lv_obj_set_style_bg_opa(box, LV_OPA_COVER, 0);
-    lv_obj_t *l = label(box, f14, C_ACCENT);
-    lv_label_set_text(l, text);
-    lv_obj_center(l);
-    lv_obj_update_layout(box);
-    lv_draw_buf_t *snap = lv_snapshot_take(box, LV_COLOR_FORMAT_RGB565);
-    lv_obj_delete(box);
+    lv_obj_update_layout(obj);
+    lv_draw_buf_t *snap = lv_snapshot_take(obj, LV_COLOR_FORMAT_RGB565);
+    lv_obj_delete(obj);
     uint16_t *out = snap ? heap_caps_calloc(w * h, 2, MALLOC_CAP_SPIRAM) : NULL;
     if (out) {
         int sw = snap->header.w < w ? snap->header.w : w, sh = snap->header.h < h ? snap->header.h : h;
@@ -307,6 +403,75 @@ uint16_t *ui_banner(const char *text, int w, int h)
     return out;
 }
 
+uint16_t *ui_banner(const char *text, int w, int h)
+{
+    lv_obj_t *b = lv_obj_create(lv_screen_active());
+    lv_obj_remove_style_all(b);
+    lv_obj_set_size(b, w, h);
+    lv_obj_set_style_bg_color(b, lv_color_black(), 0);
+    lv_obj_set_style_bg_opa(b, LV_OPA_COVER, 0);
+    lv_obj_t *l = label(b, f14, C_ACCENT);
+    lv_label_set_text(l, text);
+    lv_obj_center(l);
+    return render(b, w, h);
+}
+
+// The 3x3 controls over the picture, and the item's details: made before each playback (the
+// picture holds LVGL's lock while it plays).
+static void make_overlays(const char *title, bool live)
+{
+    static const char *const cells[9] = {
+        LV_SYMBOL_DOWN "\nCH -", LV_SYMBOL_LIST "\nInfo", LV_SYMBOL_UP "\nCH +",
+        LV_SYMBOL_MINUS "\nVOL", LV_SYMBOL_STOP "\nStop", LV_SYMBOL_PLUS "\nVOL",
+        LV_SYMBOL_LEFT "\nBack", "", LV_SYMBOL_CLOSE "\nHide"};
+    heap_caps_free(s_ov_grid);
+    heap_caps_free(s_ov_info);
+    lv_obj_t *g = lv_obj_create(lv_screen_active());
+    lv_obj_remove_style_all(g);
+    lv_obj_set_size(g, LCD_W, LCD_H);
+    lv_obj_set_style_bg_color(g, lv_color_black(), 0);
+    lv_obj_set_style_bg_opa(g, LV_OPA_COVER, 0);
+    for (int i = 0; i < 9; i++) {
+        bool ch = (i == 0 || i == 2) && live;
+        bool on = i != 7 && (ch || (i != 0 && i != 2) || s_now_index >= 0);
+        lv_obj_t *c = box(g, (i % 3) * 80 + 2, (i / 3) * 80 + 2, 76, 76, i == 4 ? 0x5a1f1f : i == 7 ? 0x000000 : C_PANEL);
+        lv_obj_t *l = label(c, i == 7 ? f14 : f18, on ? C_TEXT : C_DIM);
+        lv_obj_set_style_text_align(l, LV_TEXT_ALIGN_CENTER, 0);
+        if (i == 7) {
+            lv_obj_set_width(l, 76);
+            lv_label_set_long_mode(l, LV_LABEL_LONG_WRAP);
+            lv_label_set_text(l, title);
+        } else {
+            lv_label_set_text(l, cells[i]);
+        }
+        lv_obj_center(l);
+    }
+    s_ov_grid = render(g, LCD_W, LCD_H);
+    lv_obj_t *in = lv_obj_create(lv_screen_active());
+    lv_obj_remove_style_all(in);
+    lv_obj_set_size(in, LCD_W, LCD_H);
+    lv_obj_set_style_bg_color(in, lv_color_black(), 0);
+    lv_obj_set_style_bg_opa(in, LV_OPA_COVER, 0);
+    lv_obj_t *t = label(in, f22, C_ACCENT);
+    lv_obj_set_width(t, LCD_W - 20);
+    lv_label_set_long_mode(t, LV_LABEL_LONG_WRAP);
+    lv_obj_set_style_text_align(t, LV_TEXT_ALIGN_CENTER, 0);
+    lv_label_set_text(t, title);
+    lv_obj_align(t, LV_ALIGN_CENTER, 0, -30);
+    lv_obj_t *d = label(in, f14, C_DIM);
+    char text[96];
+    if (s_now_index >= 0) {
+        snprintf(text, sizeof(text), "%s, %d of %d\n\nTap to go back to the picture", live ? "Live" : "Recording",
+                 s_now_index + 1, s_now_total);
+    } else {
+        snprintf(text, sizeof(text), "%s\n\nTap to go back to the picture", live ? "Live" : "Recording");
+    }
+    lv_obj_set_style_text_align(d, LV_TEXT_ALIGN_CENTER, 0);
+    lv_label_set_text(d, text);
+    lv_obj_align(d, LV_ALIGN_CENTER, 0, 50);
+    s_ov_info = render(in, LCD_W, LCD_H);
+}
+
 void ui_tuning_end(void)
 {
     if (s_tune) {
@@ -320,6 +485,11 @@ void ui_tuning_end(void)
 static void play_task(void *arg)
 {
     int64_t t0 = esp_timer_get_time();
+    if (lvgl_port_lock(500)) {
+        make_overlays(s_play_title, s_play_live);
+        lvgl_port_unlock();
+    }
+    s_ov_shown = NULL;
     bool started = tv_play(s_play_url, s_play_title, s_play_live);
     if (started && lvgl_port_lock(500)) {
         tuning_show(s_play_title);
@@ -374,48 +544,401 @@ static bool start_play(const char *url, const char *title, bool live)
     return true;
 }
 
-// ---------------------------------------------------------------- the list
-
-static void on_entry(lv_event_t *e)
+static void play_entry(const char *folder, int index, int total, const cd_entry_t *e)
 {
-    int i = (int)(intptr_t)lv_event_get_user_data(e);
+    strlcpy(s_now_folder, folder, sizeof(s_now_folder));
+    s_now_index = index;
+    s_now_total = total;
+    start_play(e->url, e->title, e->live);
+}
+
+// ---------------------------------------------------------------- playback controls
+
+typedef struct {
+    tv_touch_t what;
+    int x, y;
+} ctl_t;
+
+// From the draw task: hand it on, the work happens in ctl_task.
+static void on_tv_touch(tv_touch_t what, int x, int y)
+{
+    ctl_t c = {what, x, y};
+    xQueueSend(s_ctl, &c, 0);
+}
+
+static void overlay(const uint16_t *img)
+{
+    s_ov_shown = img;
+    s_ov_until = img ? esp_timer_get_time() + OVERLAY_MS * 1000LL : 0;
+    tv_overlay(img);
+}
+
+// The next or the previous item in the folder of what plays (channel up / down).
+static void step_item(int dir)
+{
+    if (s_now_index < 0 || s_now_total <= 1 || s_play_busy) {
+        return;
+    }
+    int at = (s_now_index + dir + s_now_total) % s_now_total, total = 0;
+    cd_entry_t e;
+    for (int tries = 0; tries < 4; tries++) { // folders between the items are skipped
+        if (bridge_browse(s_now_folder, at, 1, &e, &total) != 1) {
+            return;
+        }
+        if (!e.container) {
+            overlay(NULL);
+            play_entry(s_now_folder, at, total, &e);
+            return;
+        }
+        at = (at + dir + total) % total;
+    }
+}
+
+static void ctl_task(void *arg)
+{
+    ctl_t c;
+    while (true) {
+        if (!xQueueReceive(s_ctl, &c, pdMS_TO_TICKS(200))) {
+            if (s_ov_shown && esp_timer_get_time() > s_ov_until) {
+                overlay(NULL);
+            }
+            continue;
+        }
+        ui_wake();
+        if (c.what == TV_SWIPE_UP || c.what == TV_SWIPE_DOWN) {
+            step_item(c.what == TV_SWIPE_UP ? 1 : -1);
+            continue;
+        }
+        if (c.what == TV_SWIPE_RIGHT) {
+            overlay(NULL);
+            tv_stop();
+            continue;
+        }
+        if (c.what != TV_TAP) {
+            continue;
+        }
+        if (s_ov_shown != s_ov_grid || !s_ov_grid) {
+            overlay(s_ov_shown || !s_ov_grid ? NULL : s_ov_grid); // a tap on the picture or the details
+            continue;
+        }
+        s_ov_until = esp_timer_get_time() + OVERLAY_MS * 1000LL;
+        int cell = (c.y / 80 > 2 ? 2 : c.y / 80) * 3 + (c.x / 80 > 2 ? 2 : c.x / 80);
+        switch (cell) {
+        case 0: step_item(-1); break;
+        case 1: overlay(s_ov_info); break;
+        case 2: step_item(1); break;
+        case 3: app_set_volume(app_volume() - 5); break;
+        case 4: overlay(NULL); tv_stop(); break;
+        case 5: app_set_volume(app_volume() + 5); break;
+        case 6: overlay(NULL); tv_stop(); s_back_wanted = true; break;
+        case 8: overlay(NULL); break;
+        default: break;
+        }
+    }
+}
+
+// ---------------------------------------------------------------- the number pad
+
+static const char s_pad_keys[12] = {'1', '2', '3', '4', '5', '6', '7', '8', '9', '.', '0', '>'};
+
+static bool in_live(void)
+{
+    return !strcmp(s_stack[s_depth - 1].id, "live");
+}
+
+// Looks for channel s_digits in the Live TV folder and plays it.
+static void jump_task(void *arg)
+{
+    char want[96];
+    snprintf(want, sizeof(want), "live/%s", s_digits);
+    static EXT_RAM_BSS_ATTR cd_entry_t e[20];
+    int total = 1, found = -1, at = 0;
+    for (int start = 0; start < total && found < 0; start += 20) {
+        int n = bridge_browse("live", start, 20, e, &total);
+        if (n <= 0) {
+            break;
+        }
+        for (int i = 0; i < n && found < 0; i++) {
+            if (!strcmp(e[i].id, want)) {
+                found = start + i;
+                at = i;
+            }
+        }
+    }
+    if (found >= 0) {
+        play_entry("live", found, total, &e[at]);
+    } else if (lvgl_port_lock(500)) {
+        char text[64];
+        snprintf(text, sizeof(text), "No channel %s", s_digits);
+        toast(text, 2500);
+        lvgl_port_unlock();
+    }
+    vTaskDelete(NULL);
+}
+
+static void pad_key(char k)
+{
+    size_t n = strlen(s_digits);
+    if (k == '>') {
+        if (n) {
+            s_view = VIEW_LIST;
+            s_result_gen++;
+            xTaskCreateWithCaps(jump_task, "jump", 6144, NULL, 4, NULL, MALLOC_CAP_SPIRAM);
+        }
+        return;
+    }
+    if (n + 1 < sizeof(s_digits) - 4) {
+        s_digits[n] = k;
+        s_digits[n + 1] = '\0';
+    }
+    s_result_gen++;
+}
+
+// ---------------------------------------------------------------- touch test
+
+static void cal_load(void)
+{
+    nvs_handle_t h;
+    touch_cal_t c;
+    size_t len = sizeof(c);
+    if (nvs_open(NVS_NS, NVS_READONLY, &h) == ESP_OK) {
+        if (nvs_get_blob(h, "touchcal", &c, &len) == ESP_OK && len == sizeof(c)) {
+            board_touch_set_cal(&c);
+        }
+        nvs_close(h);
+    }
+}
+
+// Least squares t = a * r + b; returns the RMS error.
+static float fit(const float *r, const float *t, int n, float *a, float *b)
+{
+    float sr = 0, st = 0, srr = 0, srt = 0;
+    for (int i = 0; i < n; i++) {
+        sr += r[i];
+        st += t[i];
+        srr += r[i] * r[i];
+        srt += r[i] * t[i];
+    }
+    float d = n * srr - sr * sr;
+    if (fabsf(d) < 1e-3f) {
+        *a = 1;
+        *b = 0;
+        return 1e9f;
+    }
+    *a = (n * srt - sr * st) / d;
+    *b = (st - *a * sr) / n;
+    float e = 0;
+    for (int i = 0; i < n; i++) {
+        float x = *a * r[i] + *b - t[i];
+        e += x * x;
+    }
+    return sqrtf(e / n);
+}
+
+// Five taps on five dots, raw points against where the dots are: the axis swap and the scale
+// and offset of each axis that fit best. Saved if they fit within 12 px.
+static void cal_finish(void)
+{
+    float rx[5], ry[5], tx[5], ty[5];
+    for (int i = 0; i < 5; i++) {
+        rx[i] = s_cal_raw[i][0];
+        ry[i] = s_cal_raw[i][1];
+        tx[i] = s_cal_at[i][0];
+        ty[i] = s_cal_at[i][1];
+    }
+    touch_cal_t c[2] = {{.swap = false}, {.swap = true}};
+    float err[2];
+    err[0] = fmaxf(fit(rx, tx, 5, &c[0].ax, &c[0].bx), fit(ry, ty, 5, &c[0].ay, &c[0].by));
+    err[1] = fmaxf(fit(ry, tx, 5, &c[1].ax, &c[1].bx), fit(rx, ty, 5, &c[1].ay, &c[1].by));
+    int best = err[1] < err[0];
+    char text[96];
+    if (err[best] <= 12) {
+        board_touch_set_cal(&c[best]);
+        nvs_handle_t h;
+        if (nvs_open(NVS_NS, NVS_READWRITE, &h) == ESP_OK) {
+            nvs_set_blob(h, "touchcal", &c[best], sizeof(c[best]));
+            nvs_commit(h);
+            nvs_close(h);
+        }
+        snprintf(text, sizeof(text), "Touch calibrated\nwithin %.0f px", err[best]);
+    } else {
+        snprintf(text, sizeof(text), "The taps didn't line up\n(%.0f px off): try again", err[best]);
+    }
+    toast(text, 3000);
+    s_view = VIEW_LIST;
+    s_result_gen++;
+}
+
+// ---------------------------------------------------------------- what a touch does
+
+static void activate_row(int i)
+{
     if (i < 0 || i >= s_count) {
         return;
     }
-    const cd_entry_t *en = &s_entries[i];
-    if (en->container) {
-        open_folder(en);
+    const cd_entry_t *e = &s_entries[i];
+    if (at_settings()) {
+        net_t net;
+        char text[200], base[96];
+        switch (i) {
+        case 0:
+            s_view = VIEW_CAL;
+            s_cal_step = 0;
+            break;
+        case 1:
+            bridge_set_profile(!strcmp(bridge_profile(), "esp32_4x3") ? "esp32" : "esp32_4x3");
+            settings_rows();
+            break;
+        case 2:
+            bridge_rescan();
+            toast("Searching...", 1500);
+            break;
+        case 3:
+            app_net(&net);
+            bridge_base(base, sizeof(base));
+            snprintf(text, sizeof(text), "channelstv %s\n%s\nBridge: %s\n%s", CHANNELSTV_VERSION, net.ip,
+                     base[0] ? bridge_found_by() : "none", bridge_name());
+            toast(text, 5000);
+            break;
+        }
+        s_result_gen++;
+        return;
+    }
+    if (e->container) {
+        open_folder(e);
     } else if (!s_play_busy) {
-        start_play(en->url, en->title, en->live);
+        play_entry(s_stack[s_depth - 1].id, s_stack[s_depth - 1].page * ROWS + i, s_total, e);
     }
 }
 
-static void on_page(lv_event_t *e)
+static void on_gesture(gesture_t g, int x, int y)
 {
-    level_t *lv = &s_stack[s_depth - 1];
-    int pages = (s_total + PAGE - 1) / PAGE;
-    int p = lv->page + (int)(intptr_t)lv_event_get_user_data(e);
-    lv->page = p < 0 ? pages - 1 : p >= pages ? 0 : p;
-    request_page();
+    lv_display_trigger_activity(NULL);
+    if (s_view == VIEW_CAL) {
+        if (g == G_RIGHT) {
+            go_back();
+            return;
+        }
+        if (g != G_TAP) {
+            return;
+        }
+        // the raw point of this tap: the one the touch began with
+        int rx, ry;
+        if (!board_touch_raw(&rx, &ry)) {
+            return;
+        }
+        s_cal_raw[s_cal_step][0] = rx;
+        s_cal_raw[s_cal_step][1] = ry;
+        if (++s_cal_step == 5) {
+            cal_finish();
+        }
+        s_result_gen++;
+        return;
+    }
+    if (s_view == VIEW_PAD) {
+        if (g == G_RIGHT || (g == G_TAP && y < HEAD_H && x < BACK_W)) {
+            go_back();
+        } else if (g == G_LEFT || (g == G_TAP && y < HEAD_H)) {
+            size_t n = strlen(s_digits); // backspace
+            if (n) {
+                s_digits[n - 1] = '\0';
+            }
+            s_result_gen++;
+        } else if (g == G_TAP) {
+            int r = (y - HEAD_H) / ROW_H, c = x / 80;
+            pad_key(s_pad_keys[(r > 3 ? 3 : r) * 3 + (c > 2 ? 2 : c)]);
+        }
+        return;
+    }
+    switch (g) {
+    case G_UP: turn_page(1); break;
+    case G_DOWN: turn_page(-1); break;
+    case G_RIGHT: go_back(); break;
+    case G_LONG:
+        if (in_live() && bridge_state() == BRIDGE_FOUND) {
+            s_view = VIEW_PAD;
+            s_digits[0] = '\0';
+            s_result_gen++;
+        }
+        break;
+    case G_TAP:
+        if (y < HEAD_H) {
+            if (x < BACK_W) {
+                go_back();
+            }
+        } else if (s_note && !lv_obj_has_flag(s_note, LV_OBJ_FLAG_HIDDEN)) {
+            bridge_rescan(); // "Try again"
+            request_page();
+        } else {
+            activate_row((y - HEAD_H) / ROW_H);
+        }
+        break;
+    default: break;
+    }
 }
 
-static void on_back(lv_event_t *e)
+static void row_highlight(int i)
 {
-    go_back();
+    if (s_pressed_row >= 0 && s_pressed_row < ROWS) {
+        lv_obj_set_style_bg_color(s_row[s_pressed_row], lv_color_hex(C_PANEL), 0);
+    }
+    s_pressed_row = i;
+    if (i >= 0 && i < ROWS && s_view == VIEW_LIST && i < s_count) {
+        lv_obj_set_style_bg_color(s_row[i], lv_color_hex(C_PRESS), 0);
+    }
 }
 
-static void on_retry(lv_event_t *e)
+static void on_touch(lv_event_t *e)
 {
-    bridge_rescan();
-    request_page();
+    lv_point_t p;
+    lv_indev_get_point(lv_indev_active(), &p);
+    switch (lv_event_get_code(e)) {
+    case LV_EVENT_PRESSED:
+        s_t_x0 = s_t_x = p.x;
+        s_t_y0 = s_t_y = p.y;
+        s_t_t0 = esp_timer_get_time();
+        s_t_long = false;
+        row_highlight(p.y >= HEAD_H ? (p.y - HEAD_H) / ROW_H : -1);
+        break;
+    case LV_EVENT_PRESSING:
+        s_t_x = p.x;
+        s_t_y = p.y;
+        if (abs(s_t_x - s_t_x0) > TAP_PX || abs(s_t_y - s_t_y0) > TAP_PX) {
+            row_highlight(-1); // a swipe, not a tap on the row
+        }
+        break;
+    case LV_EVENT_LONG_PRESSED:
+        if (abs(s_t_x - s_t_x0) < TAP_PX && abs(s_t_y - s_t_y0) < TAP_PX) {
+            s_t_long = true;
+            row_highlight(-1);
+            on_gesture(G_LONG, s_t_x0, s_t_y0);
+        }
+        break;
+    case LV_EVENT_RELEASED: {
+        row_highlight(-1);
+        if (s_t_long) {
+            break; // the long press was the gesture
+        }
+        int dx = s_t_x - s_t_x0, dy = s_t_y - s_t_y0, adx = abs(dx), ady = abs(dy);
+        int ms = (esp_timer_get_time() - s_t_t0) / 1000;
+        if ((adx > SWIPE_PX || ady > SWIPE_PX) && ms < SWIPE_MS) {
+            on_gesture(adx > ady ? (dx > 0 ? G_RIGHT : G_LEFT) : (dy > 0 ? G_DOWN : G_UP), s_t_x0, s_t_y0);
+        } else if (adx < TAP_PX && ady < TAP_PX) {
+            on_gesture(G_TAP, s_t_x0, s_t_y0);
+        }
+        break;
+    }
+    default: break;
+    }
 }
+
+// ---------------------------------------------------------------- the screen
 
 static void note(const char *text, uint32_t color)
 {
-    lv_obj_t *l = label(s_list, f14, color);
-    lv_obj_set_width(l, lv_pct(100));
-    lv_label_set_long_mode(l, LV_LABEL_LONG_WRAP);
-    lv_label_set_text(l, text);
+    lbl(s_note, text);
+    lcolor(s_note, color);
+    show(s_note, true);
 }
 
 // What the bridge search says, when there is nothing to list.
@@ -433,82 +956,98 @@ static void bridge_note(void)
         note("Looking for the bridge...", C_DIM);
         return;
     case BRIDGE_NOT_FOUND:
-        snprintf(text, sizeof(text), "No bridge found on the network.\nSet its address on the web page:\nhttp://%s/", net.ip);
-        note(text, C_WARN);
+        snprintf(text, sizeof(text), "No bridge found on the network.\nSet its address on the web page:\nhttp://%s/\n\nTap to try again", net.ip);
         break;
     case BRIDGE_UNREACHABLE:
-        snprintf(text, sizeof(text), "The bridge at %s is not reachable.\nChange it on http://%s/", bridge_override(), net.ip);
-        note(text, C_WARN);
+        snprintf(text, sizeof(text), "The bridge at %s is not reachable.\nChange it on http://%s/\n\nTap to try again",
+                 bridge_override(), net.ip);
         break;
     case BRIDGE_FOUND:
-        note("The bridge didn't answer.", C_WARN);
+        snprintf(text, sizeof(text), "The bridge didn't answer.\n\nTap to try again");
         break;
     }
-    lv_obj_t *b = lv_list_add_button(s_list, LV_SYMBOL_REFRESH, "Try again");
-    lv_obj_add_style(b, &s_btn_style, 0);
-    lv_obj_add_event_cb(b, on_retry, LV_EVENT_CLICKED, NULL);
+    note(text, C_WARN);
+}
+
+static void rows_hidden(void)
+{
+    for (int i = 0; i < ROWS; i++) {
+        show(s_row[i], false);
+    }
 }
 
 static void rebuild(void)
 {
-    lv_obj_clean(s_list);
     level_t *lv = &s_stack[s_depth - 1];
-    lbl(s_head, s_depth == 1 ? (bridge_name()[0] ? bridge_name() : "channelstv") : lv->title);
-    if (s_depth > 1) {
-        lv_obj_remove_flag(s_back, LV_OBJ_FLAG_HIDDEN);
-    } else {
-        lv_obj_add_flag(s_back, LV_OBJ_FLAG_HIDDEN);
+    show(s_note, false);
+    show(s_pad, s_view == VIEW_PAD);
+    show(s_cal, s_view == VIEW_CAL);
+    show(s_head_back, s_depth > 1 || s_view != VIEW_LIST);
+    lbl(s_pageno, "");
+    if (s_view == VIEW_CAL) {
+        rows_hidden();
+        lbl(s_head, "Touch test");
+        lv_obj_set_pos(s_cal, s_cal_at[s_cal_step % 5][0] - 14, s_cal_at[s_cal_step % 5][1] - 14);
+        char text[96];
+        snprintf(text, sizeof(text), "Tap the centre of the dot\n%d of 5", s_cal_step + 1);
+        note(text, C_DIM);
+        lv_obj_align(s_note, LV_ALIGN_CENTER, 0, s_cal_step == 4 ? 50 : 0);
+        return;
     }
-    if (bridge_state() != BRIDGE_FOUND) {
+    lv_obj_align(s_note, LV_ALIGN_TOP_LEFT, 8, HEAD_H + 8);
+    if (s_view == VIEW_PAD) {
+        rows_hidden();
+        char text[48];
+        snprintf(text, sizeof(text), "Channel %s_", s_digits);
+        lbl(s_head, text);
+        return;
+    }
+    lbl(s_head, s_depth == 1 ? (bridge_name()[0] ? bridge_name() : "channelstv") : lv->title);
+    if (bridge_state() != BRIDGE_FOUND && !at_settings()) {
+        rows_hidden();
         bridge_note();
         return;
     }
     if (s_count == -2) {
+        rows_hidden();
         note("Loading...", C_DIM);
         return;
     }
     if (s_count < 0) {
+        rows_hidden();
         bridge_note();
         return;
     }
     if (s_count == 0) {
+        rows_hidden();
         note("Nothing here.", C_DIM);
         return;
     }
-    for (int i = 0; i < s_count; i++) {
+    for (int i = 0; i < ROWS; i++) {
+        if (i >= s_count) {
+            show(s_row[i], false);
+            continue;
+        }
         const cd_entry_t *e = &s_entries[i];
         char text[112];
         if (e->container && e->children >= 0) {
-            snprintf(text, sizeof(text), "%.90s  (%d)", e->title, e->children);
+            snprintf(text, sizeof(text), "%.90s (%d)", e->title, e->children);
         } else {
             strlcpy(text, e->title, sizeof(text));
         }
-        lv_obj_t *b = lv_list_add_button(s_list, e->container ? LV_SYMBOL_DIRECTORY : e->live ? LV_SYMBOL_EYE_OPEN : LV_SYMBOL_VIDEO, text);
-        lv_obj_add_style(b, &s_btn_style, 0);
-        lv_label_set_long_mode(lv_obj_get_child(b, 1), LV_LABEL_LONG_DOT);
-        lv_obj_add_event_cb(b, on_entry, LV_EVENT_CLICKED, (void *)(intptr_t)i);
+        lbl(s_row_text[i], text);
+        lbl(s_row_icon[i], at_settings() ? LV_SYMBOL_SETTINGS
+                           : !strcmp(e->id, SETTINGS_ID) ? LV_SYMBOL_SETTINGS
+                           : e->container ? LV_SYMBOL_DIRECTORY : e->live ? LV_SYMBOL_EYE_OPEN : LV_SYMBOL_VIDEO);
+        lv_obj_set_style_bg_color(s_row[i], lv_color_hex(C_PANEL), 0);
+        show(s_row[i], true);
     }
-    int pages = (s_total + PAGE - 1) / PAGE;
+    int pages = (s_total + ROWS - 1) / ROWS;
     if (pages > 1) {
-        lv_obj_t *row = lv_obj_create(s_list);
-        lv_obj_remove_style_all(row);
-        lv_obj_set_size(row, lv_pct(100), 44);
-        lv_obj_set_flex_flow(row, LV_FLEX_FLOW_ROW);
-        lv_obj_set_flex_align(row, LV_FLEX_ALIGN_SPACE_BETWEEN, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
-        round_btn(row, 40, LV_SYMBOL_LEFT, C_PANEL, on_page, -1);
-        lv_obj_t *l = label(row, f14, C_DIM);
-        lv_label_set_text_fmt(l, "%d-%d of %d", lv->page * PAGE + 1, lv->page * PAGE + s_count, s_total);
-        round_btn(row, 40, LV_SYMBOL_RIGHT, C_PANEL, on_page, 1);
+        char p[24];
+        snprintf(p, sizeof(p), "%d/%d", lv->page + 1, pages);
+        lbl(s_pageno, p);
     }
-    lv_obj_scroll_to_y(s_list, 0, LV_ANIM_OFF);
-}
-
-// ---------------------------------------------------------------- refresh
-
-static const char *battery_symbol(int pct)
-{
-    return pct > 80 ? LV_SYMBOL_BATTERY_FULL : pct > 55 ? LV_SYMBOL_BATTERY_3
-         : pct > 30 ? LV_SYMBOL_BATTERY_2 : pct > 10 ? LV_SYMBOL_BATTERY_1 : LV_SYMBOL_BATTERY_EMPTY;
 }
 
 static void refresh(lv_timer_t *timer)
@@ -534,10 +1073,6 @@ static void refresh(lv_timer_t *timer)
     net_t net;
     app_net(&net);
     lcolor(s_wifi, !net.connected ? C_BAD : net.rssi > -60 ? C_GOOD : net.rssi > -72 ? C_WARN : C_BAD);
-    if (s_bat.mv) {
-        lbl(s_batt, s_bat.charging ? LV_SYMBOL_CHARGE : battery_symbol(s_bat.percent));
-        lcolor(s_batt, s_bat.percent <= 15 && !s_bat.charging ? C_BAD : C_TEXT);
-    }
     // the bridge found (again) or lost: start over from the top
     if (s_bridge_gen != bridge_gen()) {
         s_bridge_gen = bridge_gen();
@@ -590,10 +1125,85 @@ static void build_power_overlay(void)
     lv_obj_add_flag(s_power, LV_OBJ_FLAG_HIDDEN);
 }
 
+static void build_screen(lv_obj_t *scr)
+{
+    // the heading: back at the left end, the folder's name, the page, Wi-Fi
+    s_head_back = label(scr, &lv_font_montserrat_20, C_ACCENT);
+    lv_label_set_text(s_head_back, LV_SYMBOL_LEFT);
+    lv_obj_align(s_head_back, LV_ALIGN_TOP_LEFT, 8, 6);
+    s_head = label(scr, f18, C_ACCENT);
+    lv_obj_set_size(s_head, LCD_W - 34 - 70, 24);
+    lv_label_set_long_mode(s_head, LV_LABEL_LONG_DOT);
+    lv_obj_align(s_head, LV_ALIGN_TOP_LEFT, 34, 7);
+    s_pageno = label(scr, f14, C_DIM);
+    lv_obj_set_width(s_pageno, 50);
+    lv_obj_set_style_text_align(s_pageno, LV_TEXT_ALIGN_RIGHT, 0);
+    lv_obj_align(s_pageno, LV_ALIGN_TOP_RIGHT, -26, 9);
+    s_wifi = label(scr, &lv_font_montserrat_14, C_DIM);
+    lv_label_set_text(s_wifi, LV_SYMBOL_WIFI);
+    lv_obj_align(s_wifi, LV_ALIGN_TOP_RIGHT, -6, 9);
+
+    for (int i = 0; i < ROWS; i++) {
+        s_row[i] = box(scr, 4, HEAD_H + i * ROW_H + 1, LCD_W - 8, ROW_H - 2, C_PANEL);
+        s_row_icon[i] = label(s_row[i], &lv_font_montserrat_20, C_ACCENT);
+        lv_obj_align(s_row_icon[i], LV_ALIGN_LEFT_MID, 10, 0);
+        s_row_text[i] = label(s_row[i], f22, C_TEXT);
+        lv_obj_set_size(s_row_text[i], LCD_W - 8 - 46, 28); // one line, cut short with "..."
+        lv_label_set_long_mode(s_row_text[i], LV_LABEL_LONG_DOT);
+        lv_obj_align(s_row_text[i], LV_ALIGN_LEFT_MID, 40, 0);
+        lv_obj_add_flag(s_row[i], LV_OBJ_FLAG_HIDDEN);
+    }
+    s_note = label(scr, f18, C_DIM);
+    lv_obj_set_width(s_note, LCD_W - 16);
+    lv_label_set_long_mode(s_note, LV_LABEL_LONG_WRAP);
+    lv_obj_set_style_text_align(s_note, LV_TEXT_ALIGN_CENTER, 0);
+    lv_obj_align(s_note, LV_ALIGN_TOP_LEFT, 8, HEAD_H + 8);
+
+    // the number pad: 3 x 4 keys under the heading
+    s_pad = lv_obj_create(scr);
+    lv_obj_remove_style_all(s_pad);
+    lv_obj_set_pos(s_pad, 0, HEAD_H);
+    lv_obj_set_size(s_pad, LCD_W, LCD_H - HEAD_H);
+    lv_obj_remove_flag(s_pad, LV_OBJ_FLAG_CLICKABLE | LV_OBJ_FLAG_SCROLLABLE);
+    for (int i = 0; i < 12; i++) {
+        lv_obj_t *k = box(s_pad, (i % 3) * 80 + 3, (i / 3) * ROW_H + 2, 74, ROW_H - 4, i == 11 ? 0x0277bd : C_PANEL);
+        lv_obj_t *l = label(k, i == 11 ? &lv_font_montserrat_28 : f28, C_TEXT);
+        char t[4] = {s_pad_keys[i], 0};
+        lv_label_set_text(l, i == 11 ? LV_SYMBOL_PLAY : t);
+        lv_obj_center(l);
+    }
+    lv_obj_add_flag(s_pad, LV_OBJ_FLAG_HIDDEN);
+
+    // the touch test's dot
+    s_cal = lv_obj_create(scr);
+    lv_obj_remove_style_all(s_cal);
+    lv_obj_set_size(s_cal, 28, 28);
+    lv_obj_set_style_radius(s_cal, LV_RADIUS_CIRCLE, 0);
+    lv_obj_set_style_bg_color(s_cal, lv_color_hex(C_ACCENT), 0);
+    lv_obj_set_style_bg_opa(s_cal, LV_OPA_COVER, 0);
+    lv_obj_set_style_border_color(s_cal, lv_color_hex(C_TEXT), 0);
+    lv_obj_set_style_border_width(s_cal, 3, 0);
+    lv_obj_remove_flag(s_cal, LV_OBJ_FLAG_CLICKABLE);
+    lv_obj_add_flag(s_cal, LV_OBJ_FLAG_HIDDEN);
+
+    // over everything on the screen: every touch comes here
+    s_catch = lv_obj_create(scr);
+    lv_obj_remove_style_all(s_catch);
+    lv_obj_set_size(s_catch, LCD_W, LCD_H);
+    lv_obj_add_flag(s_catch, LV_OBJ_FLAG_CLICKABLE);
+    lv_obj_remove_flag(s_catch, LV_OBJ_FLAG_SCROLLABLE | LV_OBJ_FLAG_GESTURE_BUBBLE);
+    lv_obj_add_event_cb(s_catch, on_touch, LV_EVENT_PRESSED, NULL);
+    lv_obj_add_event_cb(s_catch, on_touch, LV_EVENT_PRESSING, NULL);
+    lv_obj_add_event_cb(s_catch, on_touch, LV_EVENT_LONG_PRESSED, NULL);
+    lv_obj_add_event_cb(s_catch, on_touch, LV_EVENT_RELEASED, NULL);
+}
+
 void ui_start(void)
 {
     s_requests = xQueueCreate(4, sizeof(request_t));
+    s_ctl = xQueueCreate(8, sizeof(ctl_t));
     strcpy(s_stack[0].id, "0");
+    cal_load();
     lvgl_port_cfg_t port = ESP_LVGL_PORT_INIT_CONFIG();
     port.task_affinity = 0;
     port.task_stack = 8192;
@@ -618,54 +1228,12 @@ void ui_start(void)
     f14 = ttf(14);
     f18 = ttf(18);
     f22 = ttf(22);
+    f28 = ttf(28);
     lv_obj_t *scr = lv_screen_active();
     lv_obj_set_style_bg_color(scr, lv_color_hex(C_BG), 0);
     lv_obj_set_style_text_color(scr, lv_color_hex(C_TEXT), 0);
-
-    lv_style_init(&s_btn_style); // what every list button gets, once for all: internal RAM is tight
-    lv_style_set_bg_color(&s_btn_style, lv_color_hex(C_PANEL));
-    lv_style_set_radius(&s_btn_style, 8);
-    lv_style_set_border_width(&s_btn_style, 0);
-    lv_style_set_text_color(&s_btn_style, lv_color_hex(C_TEXT));
-    lv_style_set_text_font(&s_btn_style, f18);
-    lv_style_set_pad_ver(&s_btn_style, 10);
-
-    // the bar: back, the folder's name, Wi-Fi and battery
-    lv_obj_t *bar = lv_obj_create(scr);
-    lv_obj_remove_style_all(bar);
-    lv_obj_set_size(bar, LCD_W, 32);
-    lv_obj_align(bar, LV_ALIGN_TOP_MID, 0, 0);
-    s_back = lv_button_create(bar);
-    lv_obj_set_size(s_back, 40, 30);
-    lv_obj_align(s_back, LV_ALIGN_LEFT_MID, 2, 0);
-    lv_obj_set_style_bg_color(s_back, lv_color_hex(C_PANEL), 0);
-    lv_obj_set_style_shadow_width(s_back, 0, 0);
-    lv_obj_add_event_cb(s_back, on_back, LV_EVENT_CLICKED, NULL);
-    lv_obj_t *bl = lv_label_create(s_back);
-    lv_obj_set_style_text_font(bl, &lv_font_montserrat_20, 0);
-    lv_label_set_text(bl, LV_SYMBOL_LEFT);
-    lv_obj_center(bl);
-    lv_obj_add_flag(s_back, LV_OBJ_FLAG_HIDDEN);
-    s_head = label(bar, f18, C_ACCENT);
-    lv_obj_set_width(s_head, LCD_W - 44 - 56);
-    lv_label_set_long_mode(s_head, LV_LABEL_LONG_DOT);
-    lv_obj_align(s_head, LV_ALIGN_LEFT_MID, 48, 0);
-    s_wifi = label(bar, &lv_font_montserrat_14, C_DIM);
-    lv_label_set_text(s_wifi, LV_SYMBOL_WIFI);
-    lv_obj_align(s_wifi, LV_ALIGN_RIGHT_MID, -34, 0);
-    s_batt = label(bar, &lv_font_montserrat_14, C_TEXT);
-    lv_obj_set_width(s_batt, 24);
-    lv_obj_set_style_text_align(s_batt, LV_TEXT_ALIGN_RIGHT, 0);
-    lv_obj_align(s_batt, LV_ALIGN_RIGHT_MID, -6, 0);
-
-    s_list = lv_list_create(scr);
-    lv_obj_set_size(s_list, LCD_W, LCD_H - 32);
-    lv_obj_align(s_list, LV_ALIGN_BOTTOM_MID, 0, 0);
-    lv_obj_set_style_bg_color(s_list, lv_color_hex(C_BG), 0);
-    lv_obj_set_style_border_width(s_list, 0, 0);
-    lv_obj_set_style_radius(s_list, 0, 0);
-    lv_obj_set_style_pad_all(s_list, 6, 0);
-    lv_obj_set_style_pad_row(s_list, 4, 0);
+    lv_obj_remove_flag(scr, LV_OBJ_FLAG_SCROLLABLE);
+    build_screen(scr);
 
     s_toast = lv_label_create(lv_layer_top());
     lv_obj_set_style_bg_color(s_toast, lv_color_hex(0x000000), 0);
@@ -681,12 +1249,39 @@ void ui_start(void)
     lv_obj_add_flag(s_toast, LV_OBJ_FLAG_HIDDEN);
 
     build_power_overlay();
-    lv_timer_create(refresh, 200, NULL);
+    lv_timer_create(refresh, 100, NULL);
     refresh(NULL);
     lvgl_port_unlock();
     board_backlight(BL_ON);
+    tv_set_touch_handler(on_tv_touch);
     // stack in PSRAM: it only does network I/O
     xTaskCreateWithCaps(browse_task, "browse", 6144, NULL, 3, NULL, MALLOC_CAP_SPIRAM);
+    // internal stack: the volume it sets is saved to NVS (flash), which a task with its stack
+    // in PSRAM must not do
+    xTaskCreate(ctl_task, "tvctl", 4096, NULL, 4, NULL);
+}
+
+bool ui_touch(const char *gesture, int x, int y)
+{
+    static const struct { const char *name; gesture_t g; tv_touch_t t; } names[] = {
+        {"tap", G_TAP, TV_TAP}, {"long", G_LONG, TV_NONE}, {"up", G_UP, TV_SWIPE_UP},
+        {"down", G_DOWN, TV_SWIPE_DOWN}, {"left", G_LEFT, TV_SWIPE_LEFT}, {"right", G_RIGHT, TV_SWIPE_RIGHT}};
+    for (size_t i = 0; i < sizeof(names) / sizeof(names[0]); i++) {
+        if (strcmp(gesture, names[i].name)) {
+            continue;
+        }
+        if (tv_playing() && tv_first_picture_ms()) {
+            on_tv_touch(names[i].t, x, y); // the picture has the screen
+            return true;
+        }
+        if (!lvgl_port_lock(500)) {
+            return false;
+        }
+        on_gesture(names[i].g, x, y);
+        lvgl_port_unlock();
+        return true;
+    }
+    return false;
 }
 
 void ui_back(void)
@@ -719,6 +1314,7 @@ void ui_power_hold(int held_ms)
 
 bool ui_play(const char *url, const char *title, bool live)
 {
+    s_now_index = -1; // from the web page: no folder to step through
     return start_play(url, title, live);
 }
 

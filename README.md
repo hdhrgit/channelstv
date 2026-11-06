@@ -16,15 +16,29 @@ speaker codec, three keys and a Li-ion battery.
 ## Using it
 
 - **Screen:** the bridge's folders (Live TV, Favorites, Recent recordings, TV Shows, Movies,
-  Recording now, Channels by source), a page of 12 at a time with ◀ ▶ to page through. Tap a
-  folder to open it, the arrow at the top left to go back. Tap a channel or a recording to play
-  it. "Tuning... N s" covers the screen until the first picture (the DVR can take 15-30 s to
-  start a channel; a tap there cancels). Tap the picture to stop.
+  Recording now, Channels by source) and Settings, four big rows a page; the page number is at
+  the top right.
+  - Swipe up for the next page, down for the previous one; swipe right (or tap the arrow at the
+    top left) to go back.
+  - Tap a folder to open it, a channel or a recording to play it. "Tuning... N s" covers the
+    screen until the first picture (the DVR can take 15-30 s to start a channel; a tap there
+    cancels).
+  - In Live TV, a long press opens a number pad: type a channel number (`.` for subchannels) and
+    tap ▶. Swipe left (or tap the heading) to delete a digit.
+- **While playing:** tap the picture for the controls, a 3x3 grid that hides after 4 s: channel
+  down / Info / channel up, volume down / Stop / volume up, Back / the title / Hide. Swipe up or
+  down for the next or previous channel (the next or previous item of the folder), swipe right
+  to stop.
+- **Settings:** Touch test (tap five dots; the board works out how the touch panel lines up with
+  the screen and keeps it), the picture shape (16:9 or the centre 4:3), Find the bridge again,
+  About.
 - **Keys:** PWR stops playback, or goes back a folder. Hold PWR for 3 s to power off on battery.
   VOL+ and VOL- change the volume.
 - **Web page:** `http://<board-ip>/` shows the status, the bridge it uses, a browser for the same
   folders and a picture of the screen. It also sets the bridge address, the picture shape and
-  the volume. The API is listed in [`main/web.h`](main/web.h).
+  the volume. The API is listed in [`main/web.h`](main/web.h); `/api/touch` acts as a finger
+  would (`?gesture=tap&x=..&y=..`, or `long`, `up`, `down`, `left`, `right`) and lists the last
+  touch points, raw and mapped.
 
 Live channels keep up with the live edge. When the board has fallen behind, it skips ahead to
 what the bridge has just received, and it trims a little audio to catch up smaller delays.

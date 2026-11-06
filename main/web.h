@@ -7,6 +7,8 @@
 //   GET  /api/browse?id=ID[&start=N]  a page of a ContentDirectory folder ("0" is the top)
 //   GET  /api/play?url=U[&title=T][&live=1], /api/stop
 //   GET  /api/tv[?drop=1]       playback progress; drop=1 breaks the stream's connection (test)
+//   GET  /api/touch[?gesture=tap|long|up|down|left|right&x=&y=]  acts as a finger would; the
+//                               calibration and the last touch points, raw and mapped
 //   GET  /api/screen            what the screen shows, as a 240x240 BMP
 //   POST /api/ota               raw app image: flash it to the spare slot and reboot
 #pragma once
