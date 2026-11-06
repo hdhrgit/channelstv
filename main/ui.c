@@ -864,8 +864,10 @@ static void seek_now(void)
     s_seek_s = 0;
     overlay(NULL);
     static EXT_RAM_BSS_ATTR cd_entry_t e; // off ctl_task's stack: browsing needs its room
-    bool offered = s_now_index >= 0 && bridge_browse(s_now_folder, s_now_index, 1, &e, &total) == 1 &&
-                   !strcmp(e.id, s_play_id) && e.time_seek;
+    // from the web page there's no place in a folder to read it again: the answer to the seek
+    // tells (a stream that comes from the top stops the seeking)
+    bool offered = s_now_index < 0 || (bridge_browse(s_now_folder, s_now_index, 1, &e, &total) == 1 &&
+                                       !strcmp(e.id, s_play_id) && e.time_seek);
     if (!offered) {
         s_seekable = false;
         tv_call_locked(grid_locked, NULL);
@@ -1770,13 +1772,13 @@ bool ui_seek(int by_s, int *at_s, int *dur_s)
     return true;
 }
 
-bool ui_play(const char *url, const char *title, bool live)
+bool ui_play(const char *url, const char *title, bool live, const char *id, int dur_s, bool time_seek)
 {
     s_now_index = -1; // from the web page: no folder to step through
-    s_offer_seek = false;
-    s_play_dur_s = 0;
-    s_play_id[0] = '\0';
-    return start_play(url, title, live, 0);
+    s_offer_seek = !live && time_seek && id && id[0];
+    s_play_dur_s = live ? 0 : dur_s;
+    strlcpy(s_play_id, s_offer_seek ? id : "", sizeof(s_play_id));
+    return start_play(url, title, live, s_offer_seek ? resume_load(id, dur_s) : 0);
 }
 
 void ui_wake(void)

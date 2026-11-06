@@ -1,5 +1,10 @@
 # Changelog
 
+## Unreleased
+
+- Web page: search the titles of movies, recent recordings and shows; a result plays on the
+  board (a recording with its seek keys and position) or opens the show's episodes.
+
 ## v0.2.1 (2026-11-06)
 
 - Settings → Web control: full, read-only (the default, also after updating) or off. Read-only
