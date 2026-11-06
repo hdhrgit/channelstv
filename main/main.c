@@ -29,6 +29,7 @@
 #include "board.h"
 #include "bridge.h"
 #include "player.h"
+#include "rotate.h"
 #include "setup.h"
 #include "tv.h"
 #include "ui.h"
@@ -383,6 +384,7 @@ void app_main(void)
     }
     volume_load();
     ui_start();
+    rotate_start();
     tv_init();
     if (board_speaker()) {
         esp_codec_dev_set_out_vol(board_speaker(), s_volume);

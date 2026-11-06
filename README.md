@@ -91,8 +91,12 @@ The setup page then offers **Back to <network>** for the one just forgotten.
   place is kept in NVS; within its first 30 s or last minute it starts from the top). Without
   that bridge feature, recordings play from the start to the end.
 - **Settings:** Touch test (tap five dots; the board works out how the touch panel lines up with
-  the screen and keeps it), the picture shape (16:9 or the centre 4:3), Find the bridge again,
-  About.
+  the screen and keeps it), the picture shape (16:9 or the centre 4:3), Rotation, Find the
+  bridge again, About.
+- **Rotation:** by default the screen turns with the board. The motion sensor (QMI8658) says
+  which edge is down; the picture turns once the board has stayed that way for a second, and
+  not while it lies flat. Settings, the web page and `/api/rotation` set it to auto or a fixed
+  0°, 90°, 180° or 270° instead. The touch test always runs the panel's own way up.
 - **Keys:** PWR stops playback, or goes back a folder. Hold PWR for 3 s to power off on battery.
   VOL+ and VOL- change the volume.
 - **Web page:** `http://<board-ip>/` shows the status, the bridge it uses, a browser for the same
