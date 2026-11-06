@@ -22,9 +22,10 @@ void ui_power_hold(int held_ms);
 // or "right", at x, y. While something plays it goes to the playback controls. False if the
 // gesture is unknown or the screen was busy.
 bool ui_touch(const char *gesture, int x, int y);
-// Plays a stream the way a tap on an item does (/api/play). False if another start is
-// still under way.
-bool ui_play(const char *url, const char *title, bool live);
+// Plays a stream the way a tap on an item does (/api/play). For a recording, id, dur_s and
+// time_seek (as the folder lists it) give it the seek keys, the position and resume. False if
+// another start is still under way.
+bool ui_play(const char *url, const char *title, bool live, const char *id, int dur_s, bool time_seek);
 // Seeks the recording that plays by by_s seconds (/api/seek), as the seek keys do; false if
 // it can't (live, nothing plays, or the bridge doesn't seek). *at_s: where it is (-1: not
 // seekable), *dur_s: its length (0: unknown).

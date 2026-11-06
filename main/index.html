@@ -40,6 +40,13 @@
 
 <div id="locked" class="card hint" hidden>Web control is <b id="lockmode"></b>: only the status shows here. Change it on the board: Settings → Web control.</div>
 <div id="controls">
+<h2>Search</h2>
+<div class="card">
+  <input id="q" type="search" placeholder="a movie, recording or show: part of its title" autocomplete="off">
+  <div class="hint" id="qhint"></div>
+  <ul id="found"></ul>
+</div>
+
 <h2>Bridge</h2>
 <div class="card">
   <label for="bridge">Bridge address</label>
@@ -127,6 +134,9 @@ $('save').onclick = async () => {
 $('rescan').onclick = () => fetch('/api/rescan').then(() => setTimeout(refresh, 1500));
 $('stop').onclick = () => fetch('/api/stop').then(refresh);
 
+// what /api/play needs to play an item as a tap on the board would (seek keys, position, resume)
+const playQuery = e => new URLSearchParams({url: e.url, title: e.title, live: e.live ? 1 : 0, id: e.id,
+                                           duration: e.duration_s || 0, seek: e.time_seek ? 1 : 0});
 const path = [{id: '0', title: 'Top'}];
 async function browse(start = 0) {
   const at = path[path.length - 1];
@@ -145,13 +155,76 @@ async function browse(start = 0) {
       if (a.dataset.more) return browse(+a.dataset.more);
       const e = d.entries[+a.dataset.i];
       if (e.container) { path.push({id: e.id, title: e.title}); browse(); }
-      else fetch(`/api/play?${new URLSearchParams({url: e.url, title: e.title, live: e.live ? 1 : 0})}`).then(() => setTimeout(refresh, 1000));
+      else fetch(`/api/play?${playQuery(e)}`).then(() => setTimeout(refresh, 1000));
     };
   } catch (e) {
     $('list').innerHTML = `<li class="bad">${esc(e.message || e)}</li>`;
   }
 }
 $('up').onclick = () => { path.length = 1; browse(); };
+
+// Search: the bridge has no search of its own (no UPnP Search), so the page reads Movies,
+// Recent recordings and the shows in TV Shows (a page of 20 at a time), keeps them for a few
+// minutes and matches titles as you type: every word, ignoring case and accents.
+const SCOPE = [{id: 'movies', name: 'Movies'}, {id: 'recent', name: 'Recent recordings'}, {id: 'rec', name: 'TV Shows'}];
+const KEEP_MS = 5 * 60 * 1000;
+let index = null, indexAt = 0, indexing = null;
+const fold = t => t.normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase();
+async function readFolder(f, note) {
+  const all = [];
+  for (let start = 0, total = 1; start < total;) {
+    const r = await fetch(`/api/browse?id=${encodeURIComponent(f.id)}&start=${start}`);
+    if (!r.ok) throw new Error(await r.text());
+    const d = await r.json();
+    total = d.total;
+    if (!d.entries.length) break;
+    start += d.entries.length;
+    all.push(...d.entries.map(e => ({...e, where: f.name, key: fold(e.title)})));
+    note(`Reading ${f.name}... ${start} of ${total}`);
+  }
+  return all;
+}
+async function readAll() {
+  const all = [];
+  for (const f of SCOPE) all.push(...await readFolder(f, t => $('qhint').textContent = t));
+  return all;
+}
+async function search() {
+  const q = fold($('q').value.trim());
+  if (!q) { $('found').innerHTML = ''; $('qhint').textContent = ''; return; }
+  if (!index || Date.now() - indexAt > KEEP_MS) {
+    try {
+      index = await (indexing = indexing || readAll());
+      indexAt = Date.now();
+    } catch (e) {
+      $('qhint').innerHTML = `<span class="bad">${esc(e.message || e)}</span>`;
+      return;
+    } finally {
+      indexing = null;
+    }
+  }
+  const words = q.split(/\s+/);
+  const hits = index.filter(e => words.every(w => e.key.includes(w)));
+  $('qhint').textContent = `${hits.length} found in ${SCOPE.map(f => f.name).join(', ')}`;
+  $('found').innerHTML = hits.slice(0, 50).map((e, i) =>
+    `<li><a data-i="${i}">${e.container ? '📁 ' : '🎬 '}${esc(e.title)}</a><span class="hint">${esc(e.where)}</span></li>`).join('') +
+    (hits.length > 50 ? `<li class="hint">and ${hits.length - 50} more: type more of the title</li>` : '');
+  $('found').onclick = ev => {
+    const a = ev.target.closest('a');
+    if (!a) return;
+    const e = hits[+a.dataset.i];
+    if (e.container) { // a show: its episodes in Browse
+      path.length = 1;
+      path.push({id: e.id, title: e.title});
+      browse();
+      $('list').scrollIntoView({behavior: 'smooth'});
+    } else {
+      fetch(`/api/play?${playQuery(e)}`).then(() => setTimeout(refresh, 1000));
+    }
+  };
+}
+let typing;
+$('q').oninput = () => { clearTimeout(typing); typing = setTimeout(search, 200); };
 
 const snap = () => $('shot').src = '/api/screen?t=' + Date.now();
 $('snap').onclick = snap;

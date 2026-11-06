@@ -7,7 +7,9 @@
 //                               bridge= with nothing after it goes back to discovery
 //   GET  /api/rescan            looks for the bridge again
 //   GET  /api/browse?id=ID[&start=N]  a page of a ContentDirectory folder ("0" is the top)
-//   GET  /api/play?url=U[&title=T][&live=1], /api/stop
+//   GET  /api/play?url=U[&title=T][&live=1][&id=ID&duration=S&seek=1], /api/stop  id, duration
+//                               and seek (time_seek, from /api/browse) give a recording its
+//                               seek keys, position and resume
 //   GET  /api/seek[?by=±seconds]  where the recording that plays is; by= seeks it (needs a
 //                               bridge that takes ?t=)
 //   GET  /api/tv[?drop=1]       playback progress; drop=1 breaks the stream's connection (test)
