@@ -19,9 +19,10 @@
 #define READ_TIMEOUT_MS 1000    // every wait is this short, so a close is noticed quickly
 #define FIRST_BYTE_MS 45000     // the DVR can take 15 s and more to start a channel, and the
                                 // bridge tries it again after 20 s: one connection waits this long
-#define STALL_MS 20000          // once data flowed: nothing this long on a connection, reconnect. The
+#define STALL_MS 30000          // once data flowed: nothing this long on a connection, reconnect. The
                                 // bridge passes the DVR's segments in bursts, with gaps of 9 and
-                                // 14 s seen; a reconnect costs 15-30 s of tuning again
+                                // 14 s seen (more right at the live edge); a reconnect costs 15-30 s
+                                // of tuning again, so it waits well past those
 #define GIVE_UP_MS 60000        // no data at all for this long: fail
 #define EDGE_MS 400             // catching up: a read that waits this long found the live edge
 #define CATCH_UP_MAX_MS 60000   // and it stops after this long whatever happens

@@ -11,7 +11,6 @@
 #include "freertos/queue.h"
 #include "freertos/stream_buffer.h"
 #include "esp_heap_caps.h"
-#include "esp_timer.h"
 #include "esp_audio_dec_default.h"
 #include "esp_audio_simple_dec_default.h"
 #include "esp_aac_dec.h"
@@ -51,10 +50,11 @@ static bool out_write(int16_t *pcm, size_t n, uint32_t gen)
     return gen == s_gen;
 }
 
-// <0 error, 0 end
+// 0 at the end. However long the pipe stays empty, this waits: the stream reconnecting can
+// take half a minute, and it is the TV player that decides when to give up, not the sound
+// (a deadline here ended the whole playback whenever a reconnect ran long).
 static int pipe_read(uint8_t *buf, int len, uint32_t gen)
 {
-    int64_t deadline = esp_timer_get_time() + 15 * 1000000LL;
     while (gen == s_gen) {
         size_t n = xStreamBufferReceive(s_pipe, buf, len, pdMS_TO_TICKS(200));
         if (n > 0) {
@@ -65,9 +65,6 @@ static int pipe_read(uint8_t *buf, int len, uint32_t gen)
         }
         if (s_eof) {
             return 0;
-        }
-        if (esp_timer_get_time() > deadline) {
-            return -1;
         }
         set_state("buffering %s", s_what);
     }
@@ -92,10 +89,6 @@ static const char *decode(uint32_t gen)
     bool eos = false;
     while (!eos && !err && gen == s_gen) {
         int n = pipe_read(in, in_cap, gen);
-        if (n < 0) {
-            err = "the sound stalled";
-            break;
-        }
         eos = n == 0;
         esp_audio_simple_dec_raw_t raw = {.buffer = in, .len = n, .eos = eos};
         while ((raw.len > 0 || eos) && !err && gen == s_gen) {
