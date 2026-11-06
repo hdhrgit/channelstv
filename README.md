@@ -101,7 +101,9 @@ The setup page then offers **Back to <network>** for the one just forgotten.
   volume stays on the VOL keys. Taps add up (three taps: 1:30) and the seek happens 0.8 s after
   the last one, showing where it lands ("+1:30", "→ 12:40 / 44:00"). Info shows how far the
   recording has got. A recording left part-way resumes there the next time it's played (the
-  place is kept in NVS; within its first 30 s or last minute it starts from the top). The board
+  place is kept in NVS; within its first 30 s or last minute it starts from the top). Where
+  the bridge says it was left (`upnp:lastPlaybackPosition`, shared with the DVR's other players)
+  comes first. A dot marks recordings not watched yet (`upnp:playbackCount` 0). The board
   asks for the start with a `TimeSeekRange.dlna.org: npt=<seconds>-` request header. A
   recording offered without time seek plays from the start to the end.
 - **Settings:** Touch test (tap five dots; the board works out how the touch panel lines up with
@@ -153,7 +155,7 @@ volume, and shows a picture of the screen. The API (all `GET` unless shown):
 | `/api/rescan` | looks for the bridge again | |
 | `/api/browse?id=ID&start=N` | a page of a folder (`0` is the top) | |
 | `/api/search?q=WORDS&start=N` | recordings, movies and shows whose titles hold every word; `{"no_search":true}` if the bridge can't search (the page then looks through its folders) | |
-| `/api/play?url=U&title=T&live=1&id=ID&duration=S&seek=1`, `/api/stop` | plays a stream, stops; `id`, `duration` and `seek` (from `/api/browse`) give a recording its seek keys, position and resume | |
+| `/api/play?url=U&title=T&live=1&id=ID&duration=S&seek=1&at=S`, `/api/stop` | plays a stream, stops; `id`, `duration`, `seek` and `at` (from `/api/browse`) give a recording its seek keys, position and resume | |
 | `/api/seek?by=±seconds` | where a recording is; `by=` seeks it | |
 | `/api/tv` | playback progress and the stream's state | |
 | `/api/touch?gesture=tap\|long\|up\|down\|left\|right&x=&y=` | acts as a finger would; the last touch points | |

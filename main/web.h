@@ -10,9 +10,9 @@
 //   GET  /api/search?q=WORDS[&start=N]  recordings, movies and shows whose titles hold every
 //                               word, through the bridge's UPnP Search; {"no_search":true} if
 //                               it has none
-//   GET  /api/play?url=U[&title=T][&live=1][&id=ID&duration=S&seek=1], /api/stop  id, duration
-//                               and seek (time_seek, from /api/browse) give a recording its
-//                               seek keys, position and resume
+//   GET  /api/play?url=U[&title=T][&live=1][&id=ID&duration=S&seek=1&at=S], /api/stop  id,
+//                               duration, seek (time_seek) and at (last_pos_s, from /api/browse)
+//                               give a recording its seek keys, position and resume
 //   GET  /api/seek[?by=±seconds]  where the recording that plays is; by= seeks it (a recording
 //                               offered with DLNA time seek)
 //   GET  /api/tv[?drop=1]       playback progress; drop=1 breaks the stream's connection (test)

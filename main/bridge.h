@@ -54,6 +54,9 @@ typedef struct {
     int duration_s;   // a recording's length (without its ads if they are cut), 0 if unknown
     bool time_seek;   // offered with DLNA time seek (DLNA.ORG_OP=1x): it starts where a
                       // TimeSeekRange.dlna.org request header says
+    int last_pos_s;   // upnp:lastPlaybackPosition: where it was left, shared with the DVR's other
+                      // players; -1 if not given
+    int play_count;   // upnp:playbackCount: 0 unwatched; -1 if not given
 } cd_entry_t;
 
 // Browses the children of container `id` ("0" is the top), from `start`, at most `max`.

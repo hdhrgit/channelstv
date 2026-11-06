@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- Resume shared with the DVR's other players: a recording starts where the bridge says it was
+  left (`upnp:lastPlaybackPosition`, H:MM:SS(.mmm) or seconds), else where the board left it.
+- Recordings not watched yet (`upnp:playbackCount` 0) carry a dot, on the screen and the page.
 - Web page: search the titles of recordings, movies and shows, with the bridge's UPnP Search
   where it has one (every episode too), else the page's own; a result plays on the board (a
   recording with its seek keys and position) or opens the show's episodes.

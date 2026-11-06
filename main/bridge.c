@@ -590,6 +590,37 @@ static bool attr(const char *s, const char *end, const char *name, char *out, si
     return true;
 }
 
+// A DIDL time, "H:MM:SS(.mmm)", "M:SS" or plain seconds ("610.5"), in whole seconds; -1 if
+// it is none of these.
+static int didl_seconds(const char *s)
+{
+    int part[3], n = 0;
+    const char *p = s;
+    while (*p == ' ') {
+        p++;
+    }
+    if (!*p) {
+        return -1;
+    }
+    while (n < 3) {
+        char *end;
+        double v = strtod(p, &end);
+        if (end == p || v < 0) {
+            return -1;
+        }
+        part[n++] = (int)v;
+        if (*end != ':') {
+            p = end;
+            break;
+        }
+        p = end + 1;
+    }
+    if (*p && *p != ' ') {
+        return -1;
+    }
+    return n == 3 ? part[0] * 3600 + part[1] * 60 + part[2] : n == 2 ? part[0] * 60 + part[1] : part[0];
+}
+
 // The DIDL-Lite of a Browse result: containers and items, in order.
 static int parse_didl(const char *d, cd_entry_t *out, int max)
 {
@@ -610,6 +641,7 @@ static int parse_didl(const char *d, cd_entry_t *out, int max)
         memset(e, 0, sizeof(*e));
         e->container = container;
         e->children = -1;
+        e->last_pos_s = e->play_count = -1;
         attr(s, start_end, "id", e->id, sizeof(e->id));
         unescape(e->id);
         char cc[12];
@@ -632,6 +664,13 @@ static int parse_didl(const char *d, cd_entry_t *out, int max)
                 }
                 const char *op = attr(res, res_end, "protocolInfo", info, sizeof(info)) ? strstr(info, "DLNA.ORG_OP=") : NULL;
                 e->time_seek = op && op[12] == '1'; // the first digit: time seek; the second: byte ranges
+            }
+            char v[24];
+            if (tag_text(start_end, end, "upnp:lastPlaybackPosition", v, sizeof(v))) {
+                e->last_pos_s = didl_seconds(v);
+            }
+            if (tag_text(start_end, end, "upnp:playbackCount", v, sizeof(v)) && didl_seconds(v) >= 0) {
+                e->play_count = atoi(v);
             }
             tag_text(start_end, end, "res", url, sizeof(url));
             unescape(url);

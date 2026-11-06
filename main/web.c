@@ -221,6 +221,12 @@ static esp_err_t send_entries(httpd_req_t *req, const cd_entry_t *e, int n, int 
             cJSON_AddStringToObject(o, "url", e[i].url);
             cJSON_AddNumberToObject(o, "duration_s", e[i].duration_s);
             cJSON_AddBoolToObject(o, "time_seek", e[i].time_seek);
+            if (e[i].last_pos_s >= 0) {
+                cJSON_AddNumberToObject(o, "last_pos_s", e[i].last_pos_s);
+            }
+            if (e[i].play_count >= 0) {
+                cJSON_AddNumberToObject(o, "play_count", e[i].play_count);
+            }
         }
         cJSON_AddItemToArray(arr, o);
     }
@@ -277,7 +283,7 @@ static esp_err_t play(httpd_req_t *req)
     char id[80] = "";
     query_str(req, "id", id, sizeof(id));
     bool ok = ui_play(url, title[0] ? title : url, query_int(req, "live", 0), id, query_int(req, "duration", 0),
-                      query_int(req, "seek", 0));
+                      query_int(req, "seek", 0), query_int(req, "at", -1));
     free(url);
     return send_raw_json(req, ok ? "{\"ok\":true}" : "{\"ok\":false,\"error\":\"another start is under way\"}");
 }
