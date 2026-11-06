@@ -1449,7 +1449,7 @@ static void battery_line(void)
     if (shown != s_batt_shown) {
         s_batt_shown = shown;
         show(s_batt, shown);
-        lv_obj_set_width(s_pageno, shown ? 36 : 50);
+        lv_obj_set_width(s_pageno, shown ? 42 : 50);
         lv_obj_align(s_pageno, LV_ALIGN_TOP_RIGHT, shown ? -86 : -26, 9);
         head_fit();
     }
@@ -1563,6 +1563,7 @@ static void build_screen(lv_obj_t *scr)
     lv_obj_align(s_head, LV_ALIGN_TOP_LEFT, 34, 7);
     s_pageno = label(scr, f14, C_DIM);
     lv_obj_set_width(s_pageno, 50);
+    lv_label_set_long_mode(s_pageno, LV_LABEL_LONG_CLIP); // "12/67" on one line, never wrapped
     lv_obj_set_style_text_align(s_pageno, LV_TEXT_ALIGN_RIGHT, 0);
     lv_obj_align(s_pageno, LV_ALIGN_TOP_RIGHT, -26, 9);
     s_wifi = label(scr, &lv_font_montserrat_14, C_DIM);
