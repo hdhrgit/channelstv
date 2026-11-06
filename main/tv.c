@@ -408,18 +408,18 @@ typedef struct {
 // Keeping up with the live edge. The bridge (and the DVR behind it) can hold a minute or more
 // of stream that the board, playing at 1.0x, never gets through: every stall upstream added to
 // it for good (84 s behind the DVR after a night on one channel). Two ways back:
-//  - catching up: 10 s after the start and after each reconnect, and whenever the ring stays
-//    full for 3 minutes (the bridge has more waiting), the fetcher drops everything waiting up
-//    to the live edge and the picture starts again from the next keyframe: one jump. At the
-//    edge the bridge sends ~10 s bursts, which kept the ring full for 30 s at a time too: a
-//    catch-up then only threw away the cushion, and the picture waited for the next burst;
+//  - catching up: whenever the ring stays full for 3 minutes (the bridge has a lot waiting),
+//    the fetcher drops everything waiting up to the live edge and the picture starts again from
+//    the next keyframe: one jump. Not right after a start: right at the edge the bridge sends
+//    its segments in bursts with gaps of up to ~14 s, and with nothing in hand the picture
+//    stalled at every gap (about one stall a minute, 19-20 fps on average);
 //  - trimming: while the sound and the ring hold more than TARGET_MS even at their lowest over
 //    60 s, one AAC frame (23 ms) in 25 is left out and the clock moves with it, so the picture
-//    plays 4 % faster too (its frames are shown a little sooner; none is lost).
-#define TARGET_MS 3000
+//    plays 4 % faster too (its frames are shown a little sooner; none is lost). TARGET_MS is
+//    the cushion kept against those gaps.
+#define TARGET_MS 8000
 #define TRIM_EVERY_US (25 * 23220) // one AAC frame left out of 25
 #define LAT_SLOTS 120              // half-second samples: the lowest over 60 s
-#define CATCH_UP_AFTER_US (10 * 1000000LL)
 #define CATCH_UP_FULL_MS 180000
 static volatile int32_t s_lat_ms, s_lat_min_ms; // what the board holds now, the lowest over 60 s
 static volatile bool s_trim;
@@ -718,22 +718,15 @@ static void tv_demux_task(void *arg)
 {
     demux_t *dm = s_dm;
     uint8_t pkt[188];
-    int64_t catch_up_at = 0, last_catch_up = 0;
-    bool first = true;
+    int64_t last_catch_up = esp_timer_get_time();
     while (!s_stop) {
         if (s_preroll_done) {
             flush_preroll(dm);
         }
         int64_t now = esp_timer_get_time();
         latency(dm, now);
-        if (first && s_shown) {
-            first = false;
-            catch_up_at = now + CATCH_UP_AFTER_US;
-        }
-        if (s_live && !stream_catching_up(s_src) &&
-            ((catch_up_at && now >= catch_up_at) ||
-             (stream_full_ms(s_src) >= CATCH_UP_FULL_MS && now - last_catch_up > CATCH_UP_FULL_MS * 1000LL))) {
-            catch_up_at = 0;
+        if (s_live && !stream_catching_up(s_src) && stream_full_ms(s_src) >= CATCH_UP_FULL_MS &&
+            now - last_catch_up > CATCH_UP_FULL_MS * 1000LL) {
             last_catch_up = now;
             s_banner_want = true;
             stream_catch_up(s_src);
@@ -758,7 +751,6 @@ static void tv_demux_task(void *arg)
             ts_reset(&dm->ts); // a new connection: new PAT/PMT, new timestamps, from a keyframe
             new_epoch(dm);
             s_restarts++;
-            catch_up_at = esp_timer_get_time() + CATCH_UP_AFTER_US; // it may start behind too
             if (s_banner_want) {
                 s_catch_epoch = dm->epoch; // a catch-up that ended in a reconnect
             }

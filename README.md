@@ -40,8 +40,9 @@ speaker codec, three keys and a Li-ion battery.
   would (`?gesture=tap&x=..&y=..`, or `long`, `up`, `down`, `left`, `right`) and lists the last
   touch points, raw and mapped.
 
-Live channels keep up with the live edge. When the board has fallen behind, it skips ahead to
-what the bridge has just received, and it trims a little audio to catch up smaller delays.
+Live channels keep about 8 seconds in hand, so the gaps in the bridge's delivery don't stall the
+picture. Anything beyond that is trimmed by playing 4 % faster (one audio frame in 25 left
+out); if the board falls minutes behind, it skips ahead to what the bridge has just received.
 Recordings play from the start to the end, without seeking.
 
 ## Finding the bridge
