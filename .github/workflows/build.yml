@@ -69,7 +69,8 @@ jobs:
       - name: Release notes
         run: |
           ver="${GITHUB_REF_NAME%%-*}"
-          awk -v h="## $ver" '$0 == h {on = 1; next} /^## / {on = 0} on' CHANGELOG.md > notes.md
+          # "## v0.2.1", or "## v0.2.1 (2026-11-06)"
+          awk -v h="## $ver" '$0 == h || index($0, h " ") == 1 {on = 1; next} /^## / {on = 0} on' CHANGELOG.md > notes.md
           if [ ! -s notes.md ]; then echo "no CHANGELOG.md section for $ver" >&2; exit 1; fi
           # the last release (not an rc) before this tag, else the first commit
           prev=$(git describe --tags --abbrev=0 --match 'v[0-9]*' --exclude '*-*' "$GITHUB_REF_NAME^" 2>/dev/null) ||

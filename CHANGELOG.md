@@ -1,6 +1,6 @@
 # Changelog
 
-## v0.2.1
+## v0.2.1 (2026-11-06)
 
 - Settings → Web control: full, read-only (the default, also after updating) or off. Read-only
   serves the status page and `/api/status` only; off runs no web server. Only a finger on the
@@ -11,7 +11,7 @@
   pad's typed channel shows again).
 - README: a demo GIF of the board.
 
-## v0.2.0
+## v0.2.0 (2026-11-06)
 
 - Release images from GitHub Actions: `full.bin` (first install at `0x0`, USB or the browser),
   `ota.bin` (updates over Wi-Fi) and `SHA256SUMS`; reproducible builds.
