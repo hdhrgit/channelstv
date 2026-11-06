@@ -7,6 +7,9 @@
 //                               bridge= with nothing after it goes back to discovery
 //   GET  /api/rescan            looks for the bridge again
 //   GET  /api/browse?id=ID[&start=N]  a page of a ContentDirectory folder ("0" is the top)
+//   GET  /api/search?q=WORDS[&start=N]  recordings, movies and shows whose titles hold every
+//                               word, through the bridge's UPnP Search; {"no_search":true} if
+//                               it has none
 //   GET  /api/play?url=U[&title=T][&live=1][&id=ID&duration=S&seek=1], /api/stop  id, duration
 //                               and seek (time_seek, from /api/browse) give a recording its
 //                               seek keys, position and resume

@@ -647,48 +647,39 @@ static int parse_didl(const char *d, cd_entry_t *out, int max)
     return n;
 }
 
-int bridge_browse(const char *id, int start, int max, cd_entry_t *out, int *total)
+// A ContentDirectory action whose answer is a page of DIDL-Lite (Browse, Search), with args its
+// XML arguments. Returns how many came back and sets *total, or -1; *status is the HTTP status
+// (500 with a UPnP fault, such as an action the bridge doesn't have).
+static int cd_call(const char *action, const char *args, int max, cd_entry_t *out, int *total, int *status)
 {
     char control[200];
     xSemaphoreTake(s_lock, portMAX_DELAY);
-    // the profile on the browse too: the bridge then hands out stream URLs made for it
+    // the profile on the request too: the bridge then hands out stream URLs made for it
     snprintf(control, sizeof(control), "%s%sprofile=%s", s_control, strchr(s_control, '?') ? "&" : "?", s_profile);
     bool have = s_control[0];
     xSemaphoreGive(s_lock);
     *total = 0;
+    *status = 0;
     if (!have) {
         return -1;
     }
-    char esc_id[160];
-    size_t o = 0;
-    for (const char *p = id; *p && o + 6 < sizeof(esc_id); p++) {
-        if (*p == '&') {
-            o += snprintf(esc_id + o, sizeof(esc_id) - o, "&amp;");
-        } else if (*p == '<') {
-            o += snprintf(esc_id + o, sizeof(esc_id) - o, "&lt;");
-        } else {
-            esc_id[o++] = *p;
-        }
-    }
-    esc_id[o] = '\0';
-    char body[768];
-    int blen = snprintf(body, sizeof(body),
-                        "<?xml version=\"1.0\" encoding=\"utf-8\"?>"
-                        "<s:Envelope xmlns:s=\"http://schemas.xmlsoap.org/soap/envelope/\" "
-                        "s:encodingStyle=\"http://schemas.xmlsoap.org/soap/encoding/\"><s:Body>"
-                        "<u:Browse xmlns:u=\"urn:schemas-upnp-org:service:ContentDirectory:1\">"
-                        "<ObjectID>%s</ObjectID><BrowseFlag>BrowseDirectChildren</BrowseFlag><Filter>*</Filter>"
-                        "<StartingIndex>%d</StartingIndex><RequestedCount>%d</RequestedCount><SortCriteria></SortCriteria>"
-                        "</u:Browse></s:Body></s:Envelope>",
-                        esc_id, start, max);
+    char *body = malloc(1536), soapaction[96];
+    int blen = body ? snprintf(body, 1536,
+                               "<?xml version=\"1.0\" encoding=\"utf-8\"?>"
+                               "<s:Envelope xmlns:s=\"http://schemas.xmlsoap.org/soap/envelope/\" "
+                               "s:encodingStyle=\"http://schemas.xmlsoap.org/soap/encoding/\"><s:Body>"
+                               "<u:%s xmlns:u=\"urn:schemas-upnp-org:service:ContentDirectory:1\">%s</u:%s>"
+                               "</s:Body></s:Envelope>",
+                               action, args, action) : 0;
+    snprintf(soapaction, sizeof(soapaction), "\"urn:schemas-upnp-org:service:ContentDirectory:1#%s\"", action);
     esp_http_client_config_t cfg = {.url = control, .method = HTTP_METHOD_POST, .timeout_ms = 10000,
                                     .buffer_size = 4096, .buffer_size_tx = 1024, .user_agent = USER_AGENT};
-    esp_http_client_handle_t c = esp_http_client_init(&cfg);
+    esp_http_client_handle_t c = body && blen < 1536 ? esp_http_client_init(&cfg) : NULL;
     char *resp = heap_caps_malloc(SOAP_MAX, MALLOC_CAP_SPIRAM);
     int n = -1;
     if (c && resp) {
         esp_http_client_set_header(c, "Content-Type", "text/xml; charset=\"utf-8\"");
-        esp_http_client_set_header(c, "SOAPACTION", "\"urn:schemas-upnp-org:service:ContentDirectory:1#Browse\"");
+        esp_http_client_set_header(c, "SOAPACTION", soapaction);
         if (esp_http_client_open(c, blen) == ESP_OK && esp_http_client_write(c, body, blen) == blen) {
             esp_http_client_fetch_headers(c);
             int got = 0, r;
@@ -696,9 +687,9 @@ int bridge_browse(const char *id, int start, int max, cd_entry_t *out, int *tota
                 got += r;
             }
             resp[got] = '\0';
-            int status = esp_http_client_get_status_code(c);
+            *status = esp_http_client_get_status_code(c);
             char *res = strstr(resp, "<Result>"), *res_end = res ? strstr(res, "</Result>") : NULL;
-            if (status == 200 && res && res_end) {
+            if (*status == 200 && res && res_end) {
                 char tm[16] = "0";
                 tag_text(resp, NULL, "TotalMatches", tm, sizeof(tm));
                 *total = atoi(tm);
@@ -706,18 +697,95 @@ int bridge_browse(const char *id, int start, int max, cd_entry_t *out, int *tota
                 unescape(res + 8); // the DIDL-Lite document, escaped inside the SOAP answer
                 n = parse_didl(res + 8, out, max);
             } else {
-                ESP_LOGW(TAG, "Browse %s: HTTP %d", id, status);
+                ESP_LOGW(TAG, "%s: HTTP %d", action, *status);
             }
         }
     }
     if (c) {
         esp_http_client_cleanup(c);
     }
+    free(body);
     heap_caps_free(resp);
+    return n;
+}
+
+// text with XML's &, < and > escaped (and, with quoted, " and \\ escaped for a search string)
+static void xml_escape(const char *in, char *out, size_t len, bool quoted)
+{
+    size_t o = 0;
+    for (const char *p = in; *p && o + 7 < len; p++) {
+        if (*p == '&') {
+            o += snprintf(out + o, len - o, "&amp;");
+        } else if (*p == '<') {
+            o += snprintf(out + o, len - o, "&lt;");
+        } else if (*p == '>') {
+            o += snprintf(out + o, len - o, "&gt;");
+        } else if (quoted && (*p == '"' || *p == '\\')) {
+            out[o++] = '\\';
+            out[o++] = *p;
+        } else {
+            out[o++] = *p;
+        }
+    }
+    out[o] = '\0';
+}
+
+int bridge_browse(const char *id, int start, int max, cd_entry_t *out, int *total)
+{
+    char esc_id[160], args[384];
+    xml_escape(id, esc_id, sizeof(esc_id), false);
+    snprintf(args, sizeof(args),
+             "<ObjectID>%s</ObjectID><BrowseFlag>BrowseDirectChildren</BrowseFlag><Filter>*</Filter>"
+             "<StartingIndex>%d</StartingIndex><RequestedCount>%d</RequestedCount><SortCriteria></SortCriteria>",
+             esc_id, start, max);
+    int status, n = cd_call("Browse", args, max, out, total, &status);
     if (n < 0) {
+        ESP_LOGW(TAG, "Browse %s failed", id);
         bridge_rescan();
     }
     return n;
+}
+
+int bridge_search(const char *words, int start, int max, cd_entry_t *out, int *total)
+{
+    // every word in the title: dc:title contains "a" and dc:title contains "b" ...
+    char crit[640] = "", word[64], esc[160];
+    const char *p = words;
+    while (*p) {
+        while (*p == ' ' || *p == '\t') {
+            p++;
+        }
+        size_t n = strcspn(p, " \t");
+        if (!n) {
+            break;
+        }
+        snprintf(word, sizeof(word), "%.*s", (int)n, p);
+        p += n;
+        char quoted[160];
+        xml_escape(word, quoted, sizeof(quoted), true); // escaped for the criteria, then for XML
+        xml_escape(quoted, esc, sizeof(esc), false);
+        size_t at = strlen(crit);
+        snprintf(crit + at, sizeof(crit) - at, "%sdc:title contains &quot;%s&quot;", at ? " and " : "", esc);
+    }
+    if (!crit[0]) {
+        *total = 0;
+        return 0;
+    }
+    // recordings, movies and shows: not live channels (object.item.videoItem.videoBroadcast)
+    size_t at = strlen(crit);
+    snprintf(crit + at, sizeof(crit) - at,
+             " and (upnp:class = &quot;object.item.videoItem&quot; or upnp:class derivedfrom &quot;object.container&quot;)");
+    char *args = malloc(1024);
+    if (!args) {
+        return -1;
+    }
+    snprintf(args, 1024,
+             "<ContainerID>0</ContainerID><SearchCriteria>%s</SearchCriteria><Filter>*</Filter>"
+             "<StartingIndex>%d</StartingIndex><RequestedCount>%d</RequestedCount><SortCriteria></SortCriteria>",
+             crit, start, max);
+    int status, n = cd_call("Search", args, max, out, total, &status);
+    free(args);
+    return n < 0 && status == 500 ? -2 : n;
 }
 
 void bridge_status_json(char *out, size_t len)

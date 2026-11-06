@@ -61,6 +61,10 @@ typedef struct {
 // and sets *total, or -1 if the bridge couldn't be reached (and searches for it again).
 int bridge_browse(const char *id, int start, int max, cd_entry_t *out, int *total);
 
+// Searches the bridge's recordings, movies and shows (UPnP Search; not live channels) for titles
+// holding every word of words, ignoring case. Same answer as bridge_browse(); -2 if the bridge has no Search.
+int bridge_search(const char *words, int start, int max, cd_entry_t *out, int *total);
+
 // What is wrong with the bridge's client profile the board asks for (bridge_profile()): no such
 // client, not transcoding, not H.264 baseline, not one slice a frame, wider than 240. False if
 // it's fine, or the bridge's settings couldn't be read. Checked whenever the bridge is found.
