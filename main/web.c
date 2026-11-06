@@ -22,6 +22,7 @@
 #include "bridge.h"
 #include "h264dec.h"
 #include "player.h"
+#include "rotate.h"
 #include "setup.h"
 #include "stream.h"
 #include "tv.h"
@@ -251,6 +252,40 @@ static esp_err_t play(httpd_req_t *req)
     return send_raw_json(req, ok ? "{\"ok\":true}" : "{\"ok\":false,\"error\":\"another start is under way\"}");
 }
 
+// ?set=auto|0..3, ?axes=0..7, ?fake=x,y,z (g) or fake=off; the rotation either way.
+static esp_err_t rotation(httpd_req_t *req)
+{
+    char v[40];
+    if (query_str(req, "set", v, sizeof(v))) {
+        rotate_set(!strcmp(v, "auto") ? ROTATE_AUTO : atoi(v));
+    }
+    if (query_str(req, "axes", v, sizeof(v))) {
+        rotate_set_axes(atoi(v));
+    }
+    if (query_str(req, "fake", v, sizeof(v))) {
+        float x, y, z;
+        bool fake = sscanf(v, "%f,%f,%f", &x, &y, &z) == 3;
+        rotate_fake(fake, fake ? x : 0, fake ? y : 0, fake ? z : 0);
+    }
+    char buf[256];
+    rotate_status_json(buf, sizeof(buf));
+    return send_raw_json(req, buf);
+}
+
+// ?by=±seconds seeks the recording that plays; without it, where it is.
+static esp_err_t seek(httpd_req_t *req)
+{
+    int at, dur;
+    bool ok = ui_seek(query_int(req, "by", 0), &at, &dur);
+    cJSON *root = cJSON_CreateObject();
+    cJSON_AddBoolToObject(root, "ok", ok);
+    cJSON_AddBoolToObject(root, "seekable", at >= 0);
+    cJSON_AddNumberToObject(root, "position_s", at);
+    cJSON_AddNumberToObject(root, "duration_s", dur);
+    cJSON_AddBoolToObject(root, "bridge_seeks", bridge_can_seek());
+    return send_json(req, root);
+}
+
 static esp_err_t stop(httpd_req_t *req)
 {
     tv_stop();
@@ -286,7 +321,7 @@ static esp_err_t tv(httpd_req_t *req)
 }
 
 // What the screen shows, as a 24-bit BMP: the current frame while something plays (the draw
-// task hands over a copy of the next one it draws), otherwise the LVGL screen with the top layer
+// task hands over a copy of the next one it draws) or the overlay over it, otherwise the LVGL screen with the top layer
 // ("Tuning", toasts) blended over it.
 static esp_err_t screen(httpd_req_t *req)
 {
@@ -297,8 +332,20 @@ static esp_err_t screen(httpd_req_t *req)
     }
     uint8_t *px = bmp + 54; // rows bottom up, BGR
     int w, h;
-    const uint8_t *yuv = tv_capture(&w, &h, 500);
-    if (yuv) {
+    const uint16_t *ov = tv_overlay_shown();
+    const uint8_t *yuv = ov ? NULL : tv_capture(&w, &h, 500);
+    if (ov) { // the playback controls, the details or a seek over the picture
+        for (int y = 0; y < LCD_H; y++) {
+            uint8_t *o = px + (LCD_H - 1 - y) * row;
+            for (int x = 0; x < LCD_W; x++, o += 3) {
+                uint16_t c = ov[y * LCD_W + x];
+                c = c >> 8 | c << 8;
+                o[0] = (c & 0x1f) << 3;
+                o[1] = (c >> 5 & 0x3f) << 2;
+                o[2] = (c >> 11) << 3;
+            }
+        }
+    } else if (yuv) {
         uint16_t line[LCD_W * 2];
         int x0 = (LCD_W - w) / 2, y0 = (LCD_H - h) / 2;
         const uint8_t *pu = yuv + w * h, *pv = pu + (w / 2) * (h / 2);
@@ -495,7 +542,7 @@ void web_start(void)
 {
     httpd_config_t cfg = HTTPD_DEFAULT_CONFIG();
     cfg.stack_size = 8192;
-    cfg.max_uri_handlers = 20;
+    cfg.max_uri_handlers = 24;
     cfg.recv_wait_timeout = 15;
     // a browser keeps several connections open per page: close the idlest instead of refusing
     cfg.lru_purge_enable = true;
@@ -511,6 +558,8 @@ void web_start(void)
         {.uri = "/api/browse", .method = HTTP_GET, .handler = browse},
         {.uri = "/api/play", .method = HTTP_GET, .handler = play},
         {.uri = "/api/stop", .method = HTTP_GET, .handler = stop},
+        {.uri = "/api/seek", .method = HTTP_GET, .handler = seek},
+        {.uri = "/api/rotation", .method = HTTP_GET, .handler = rotation},
         {.uri = "/api/tv", .method = HTTP_GET, .handler = tv},
         {.uri = "/api/touch", .method = HTTP_GET, .handler = touch},
         {.uri = "/api/screen", .method = HTTP_GET, .handler = screen},

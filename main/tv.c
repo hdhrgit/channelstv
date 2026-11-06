@@ -65,6 +65,10 @@ static uint32_t s_audio_gen;
 static char s_title[96];
 #define UNDECODABLE 25 // decode errors before the first picture that end playback
 static char s_error[128];
+static volatile int64_t s_first_pts = -1; // of the stream's first picture ...
+static volatile int32_t s_media_ms;       // ... and how far past it the decoder is
+static void (*volatile s_hook)(void *);   // tv_call_locked(): run by the decoder, which holds LVGL
+static void *volatile s_hook_arg;
 static int s_shown, s_dropped;
 static float s_decode_ms, s_draw_ms, s_fps;
 static volatile bool s_live;         // a live channel: catching up and trimming keep it near the live edge
@@ -250,6 +254,9 @@ static void draw_task(void *arg)
     uint16_t *banner_dma = NULL; // freed a frame after its last use: by then the panel has it
     int banner_age = 0;
     while ((s_drstate = "waiting", xQueueReceive(s_full_q, &fr, portMAX_DELAY)) && fr.buf != FR_END) {
+        if (board_rotation_apply()) {
+            s_overlay_dirty = true; // the whole screen again, the new way up
+        }
         if (s_banner && !overlay_on && banner_on != s_banner_want && s_pic_h && (LCD_H - s_pic_h) / 2 >= BANNER_H) {
             if (!banner_dma) {
                 banner_dma = heap_caps_malloc(LCD_W * BANNER_H * 2, MALLOC_CAP_DMA | MALLOC_CAP_INTERNAL);
@@ -897,6 +904,15 @@ static void tv_video_task(void *arg)
     for (; !s_stop && n > AU_HEAD; n = next_au(au, true)) {
         int64_t pts;
         memcpy(&pts, au, 8);
+        if (s_first_pts < 0) {
+            s_first_pts = pts;
+        }
+        s_media_ms = pts_diff(pts, s_first_pts) / 90;
+        void (*hook)(void *) = s_hook;
+        if (hook) {
+            hook(s_hook_arg);
+            s_hook = NULL;
+        }
         epoch_map_t *m = &s_map[au[8] & 3];
         bool key = au[9];
         int kw = au[10] * 2, kh = au[11] * 2, len = n - AU_HEAD;
@@ -1037,6 +1053,8 @@ bool tv_play(const char *url, const char *title, bool live)
     s_error[0] = s_draw_err[0] = '\0';
     s_why = "";
     s_pic_w = s_pic_h = 0;
+    s_first_pts = -1;
+    s_media_ms = 0;
     s_busy = false;
     s_restarts = s_epochs = s_skipped = s_audio_gaps = s_audio_late = s_audio_gap_ms = 0;
     s_late_decoded = s_starved = 0;
@@ -1119,6 +1137,11 @@ void tv_set_touch_handler(tv_touch_fn fn)
     s_touch_fn = fn;
 }
 
+const uint16_t *tv_overlay_shown(void)
+{
+    return s_playing ? s_overlay : NULL;
+}
+
 void tv_overlay(const uint16_t *img)
 {
     if (img != s_overlay) {
@@ -1158,6 +1181,28 @@ const char *tv_end_reason(void)
 const char *tv_error(void)
 {
     return s_error[0] ? s_error : s_draw_err;
+}
+
+int tv_position_ms(void)
+{
+    return s_media_ms;
+}
+
+bool tv_call_locked(void (*fn)(void *), void *arg)
+{
+    if (!s_playing || !s_first_ms || s_hook) {
+        return false;
+    }
+    s_hook_arg = arg;
+    s_hook = fn;
+    for (int i = 0; i < 50 && s_hook; i++) {
+        vTaskDelay(pdMS_TO_TICKS(20));
+    }
+    if (s_hook) {
+        s_hook = NULL; // the stream has stalled: not now
+        return false;
+    }
+    return true;
 }
 
 int tv_first_picture_ms(void)

@@ -25,6 +25,10 @@ bool ui_touch(const char *gesture, int x, int y);
 // Plays a stream the way a tap on an item does (/api/play). False if another start is
 // still under way.
 bool ui_play(const char *url, const char *title, bool live);
+// Seeks the recording that plays by by_s seconds (/api/seek), as the seek keys do; false if
+// it can't (live, nothing plays, or the bridge doesn't seek). *at_s: where it is (-1: not
+// seekable), *dur_s: its length (0: unknown).
+bool ui_seek(int by_s, int *at_s, int *dur_s);
 // Takes the "Tuning" screen of a start away. Call with the LVGL lock held.
 void ui_tuning_end(void);
 // text in the accent colour on black, w x h, as the panel takes it (RGB565, bytes swapped), in

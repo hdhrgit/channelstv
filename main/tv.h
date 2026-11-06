@@ -26,6 +26,12 @@ const char *tv_error(void);
 #define TV_UNDECODABLE "the stream can't be decoded"
 
 int tv_first_picture_ms(void); // from the start to the first picture, 0 if none yet
+// How far into the stream the picture is, from its first frame, in ms.
+int tv_position_ms(void);
+// Runs fn(arg) in the decoder between two frames, which holds the LVGL lock while the picture
+// has the screen (to render an overlay with LVGL). Waits for it, up to a second; false if
+// nothing plays or the stream stalled. fn must be quick, and arg must outlive the call.
+bool tv_call_locked(void (*fn)(void *), void *arg);
 // The next frame drawn, as I420 (w x h, Y stride w; it sits centred on the screen), for
 // /api/screen. NULL if no picture is up or none came within timeout_ms. The buffer stays
 // valid until the next call; call from one task only.
@@ -38,5 +44,7 @@ void tv_set_touch_handler(tv_touch_fn fn);
 // A full-screen image (RGB565 in the panel's byte order, kept by the caller) drawn instead of
 // the picture until tv_overlay(NULL); the sound and the decoding go on underneath.
 void tv_overlay(const uint16_t *img);
+// The image tv_overlay() put up, NULL while the picture shows.
+const uint16_t *tv_overlay_shown(void);
 // {"title":..,"playing":..,"live":..,"fps":..,"shown":..,"dropped":..,...,"source":{...}}
 void tv_status_json(char *out, size_t len);

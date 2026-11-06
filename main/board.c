@@ -204,6 +204,7 @@ static void backlight_init(void)
 // screen = a * raw + b on each axis. The last points seen are kept, raw and mapped, for the
 // web API.
 static touch_cal_t s_cal = {.ax = 1, .ay = 1};
+static volatile int s_rot, s_rot_want; // the panel's rotation (board_rotation_apply)
 static touch_log_t s_tlog[TOUCH_LOG_N];
 static int s_tlog_n;
 static bool s_tdown;
@@ -220,6 +221,14 @@ static void touch_map(esp_lcd_touch_handle_t tp, uint16_t *x, uint16_t *y, uint1
         int mx = (int)(s_cal.ax * u + s_cal.bx + 0.5f), my = (int)(s_cal.ay * v + s_cal.by + 0.5f);
         mx = mx < 0 ? 0 : mx >= LCD_W ? LCD_W - 1 : mx;
         my = my < 0 ? 0 : my >= LCD_H ? LCD_H - 1 : my;
+        // the calibration is the panel's own way up: turn the point as the picture is turned
+        int px = mx;
+        switch (s_rot) {
+        case 1: mx = my; my = LCD_W - 1 - px; break;
+        case 2: mx = LCD_W - 1 - mx; my = LCD_H - 1 - my; break;
+        case 3: mx = LCD_H - 1 - my; my = px; break;
+        default: break;
+        }
         x[0] = mx;
         y[0] = my;
         portENTER_CRITICAL(&s_tmux);
@@ -504,6 +513,49 @@ float board_chip_temp(void)
         return -273;
     }
     return t;
+}
+
+bool board_accel(float *x, float *y, float *z)
+{
+    uint8_t reg = 0x35, a[6];
+    if (!s_imu || i2c_master_transmit_receive(s_imu, &reg, 1, a, 6, 50) != ESP_OK) {
+        return false;
+    }
+    *x = (int16_t)(a[0] | a[1] << 8) / 16384.0f; // +-2 g
+    *y = (int16_t)(a[2] | a[3] << 8) / 16384.0f;
+    *z = (int16_t)(a[4] | a[5] << 8) / 16384.0f;
+    return true;
+}
+
+// ---------------------------------------------------------------- rotation
+
+// The ST7789 turns the picture itself (MADCTL); its memory is 240 x 320, so the two
+// rotations that count from its far end need an 80 line offset.
+void board_rotation_want(int r)
+{
+    s_rot_want = r & 3;
+}
+
+int board_rotation(void)
+{
+    return s_rot;
+}
+
+bool board_rotation_apply(void)
+{
+    static const struct {
+        bool swap, mx, my;
+        int gx, gy;
+    } t[4] = {{false, false, false, 0, 0}, {true, true, false, 0, 0}, {false, true, true, 0, 80}, {true, false, true, 80, 0}};
+    int r = s_rot_want;
+    if (r == s_rot || !s_panel) {
+        return false;
+    }
+    esp_lcd_panel_swap_xy(s_panel, t[r].swap);
+    esp_lcd_panel_mirror(s_panel, t[r].mx, t[r].my);
+    esp_lcd_panel_set_gap(s_panel, t[r].gx, t[r].gy);
+    s_rot = r;
+    return true;
 }
 
 float board_imu_temp(void)

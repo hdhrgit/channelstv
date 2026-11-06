@@ -26,6 +26,7 @@
 #include "app.h"
 #include "board.h"
 #include "bridge.h"
+#include "rotate.h"
 #include "setup.h"
 #include "tv.h"
 
@@ -53,6 +54,11 @@
 #define SWIPE_MS 600
 #define TAP_PX   20
 #define OVERLAY_MS 4000                     // the playback controls hide after this
+#define SEEK_STEP_S  30                     // a tap on the seek keys ...
+#define SEEK_IDLE_MS 800                    // ... applied once the taps stop for this long
+#define RESUME_MIN_S 30                     // a recording resumes from where it was left, unless
+#define RESUME_END_S 60                     // that's in its first or last this many seconds
+#define RESUME_EVERY_US 15000000LL          // where it is, saved this often while it plays
 #define QR_PX    116                        // the setup hotspot's QR code, quiet zone not included
 #define SETTINGS_ID "#settings"
 #define NVS_NS   "channelstv"
@@ -215,18 +221,28 @@ static bool at_settings(void)
     return !strcmp(s_stack[s_depth - 1].id, SETTINGS_ID);
 }
 
+enum { SET_TOUCH, SET_PICTURE, SET_ROTATION, SET_FIND, SET_ABOUT, SET_N };
+
+// Settings, a page at a time like any folder.
 static void settings_rows(void)
 {
-    static const char *const titles[] = {"Touch test", "Picture", "Find the bridge again", "About"};
-    for (int i = 0; i < ROWS; i++) {
-        memset(&s_entries[i], 0, sizeof(s_entries[i]));
-        snprintf(s_entries[i].id, sizeof(s_entries[i].id), "#set%d", i);
-        strlcpy(s_entries[i].title, titles[i], sizeof(s_entries[i].title));
+    static const char *const titles[SET_N] = {"Touch test", "Picture", "Rotation", "Find the bridge again", "About"};
+    static const char *const rotations[] = {"auto", "0\u00b0", "90\u00b0", "180\u00b0", "270\u00b0"};
+    int first = s_stack[s_depth - 1].page * ROWS;
+    s_count = 0;
+    for (int k = first; k < SET_N && s_count < ROWS; k++) {
+        cd_entry_t *e = &s_entries[s_count++];
+        memset(e, 0, sizeof(*e));
+        snprintf(e->id, sizeof(e->id), "#set%d", k);
+        if (k == SET_PICTURE) {
+            snprintf(e->title, sizeof(e->title), "Picture: %s", !strcmp(bridge_profile(), "esp32_4x3") ? "4:3 centre" : "16:9");
+        } else if (k == SET_ROTATION) {
+            snprintf(e->title, sizeof(e->title), "Rotation: %s", rotations[rotate_setting() + 1]);
+        } else {
+            strlcpy(e->title, titles[k], sizeof(e->title));
+        }
     }
-    snprintf(s_entries[1].title, sizeof(s_entries[1].title), "Picture: %s",
-             !strcmp(bridge_profile(), "esp32_4x3") ? "4:3 centre" : "16:9");
-    s_count = ROWS;
-    s_total = ROWS;
+    s_total = SET_N;
 }
 
 // The top folder lists the bridge's folders and, after them, Settings.
@@ -333,8 +349,16 @@ static bool s_play_live;
 // what plays, for channel up / down: its folder and place in it
 static char s_now_folder[80];
 static int s_now_index = -1, s_now_total;
-// the playback controls: a 3x3 grid drawn over the picture, and the item's details
-static uint16_t *s_ov_grid, *s_ov_info;
+// what plays, for seeking and resuming: the stream without ?t=, the item (recordings only),
+// where the stream started and how long the recording is (0: unknown)
+static char s_play_base[256], s_play_id[80];
+static int s_play_at_s, s_play_dur_s;
+static bool s_seekable;
+static volatile int s_seek_s;         // the seek tapped so far, applied at s_seek_due
+static volatile int64_t s_seek_due;
+// the playback controls: a 3x3 grid drawn over the picture, the item's details, the seek under way
+static uint16_t *s_ov_grid, *s_ov_info, *s_ov_seek;
+static uint16_t *s_ov_old[2]; // replaced overlays, freed two replacements later: the drawer is done
 static volatile int64_t s_ov_until;
 static volatile const uint16_t *s_ov_shown;
 static QueueHandle_t s_ctl;
@@ -424,6 +448,133 @@ uint16_t *ui_banner(const char *text, int w, int h)
 
 // The 3x3 controls over the picture, and the item's details: made before each playback (the
 // picture holds LVGL's lock while it plays).
+static void fmt_time(char *out, size_t len, int s)
+{
+    if (s >= 3600) {
+        snprintf(out, len, "%d:%02d:%02d", s / 3600, s / 60 % 60, s % 60);
+    } else {
+        snprintf(out, len, "%d:%02d", s / 60, s % 60);
+    }
+}
+
+// Where a recording is: where its stream started plus how far into it the picture is.
+static int play_pos_s(void)
+{
+    return s_play_at_s + tv_position_ms() / 1000;
+}
+
+// "12:40 / 44:00" (after pre) and a bar, or "12:40" when the length isn't known
+static void position_line(lv_obj_t *parent, const char *pre, int at_s, int y)
+{
+    char a[16], d[16], text[48];
+    fmt_time(a, sizeof(a), at_s);
+    fmt_time(d, sizeof(d), s_play_dur_s);
+    if (s_play_dur_s) {
+        snprintf(text, sizeof(text), "%s%s / %s", pre, a, d);
+    } else {
+        snprintf(text, sizeof(text), "%s%s", pre, a);
+    }
+    lv_obj_t *l = label(parent, f22, C_TEXT);
+    lv_label_set_text(l, text);
+    lv_obj_align(l, LV_ALIGN_CENTER, 0, y);
+    if (s_play_dur_s) {
+        lv_obj_t *bar = lv_bar_create(parent);
+        lv_obj_set_size(bar, LCD_W - 40, 8);
+        lv_bar_set_range(bar, 0, s_play_dur_s);
+        lv_bar_set_value(bar, at_s < s_play_dur_s ? at_s : s_play_dur_s, LV_ANIM_OFF);
+        lv_obj_set_style_bg_color(bar, lv_color_hex(0x3a434d), LV_PART_MAIN);
+        lv_obj_set_style_bg_color(bar, lv_color_hex(C_ACCENT), LV_PART_INDICATOR);
+        lv_obj_align(bar, LV_ALIGN_CENTER, 0, y + 24);
+    }
+}
+
+static lv_obj_t *black_screen(void)
+{
+    lv_obj_t *o = lv_obj_create(lv_screen_active());
+    lv_obj_remove_style_all(o);
+    lv_obj_set_size(o, LCD_W, LCD_H);
+    lv_obj_set_style_bg_color(o, lv_color_black(), 0);
+    lv_obj_set_style_bg_opa(o, LV_OPA_COVER, 0);
+    return o;
+}
+
+// The details: the title, live or a recording, where it is in its folder and, for a recording,
+// how far it has got. Call with the LVGL lock held.
+static uint16_t *make_info(void)
+{
+    lv_obj_t *in = black_screen();
+    lv_obj_t *t = label(in, f22, C_ACCENT);
+    lv_obj_set_width(t, LCD_W - 20);
+    lv_label_set_long_mode(t, LV_LABEL_LONG_WRAP);
+    lv_obj_set_style_text_align(t, LV_TEXT_ALIGN_CENTER, 0);
+    lv_label_set_text(t, s_play_title);
+    lv_obj_align(t, LV_ALIGN_CENTER, 0, s_play_live ? -30 : -50);
+    lv_obj_t *d = label(in, f14, C_DIM);
+    char text[96];
+    if (s_now_index >= 0) {
+        snprintf(text, sizeof(text), "%s, %d of %d\n\nTap to go back to the picture", s_play_live ? "Live" : "Recording",
+                 s_now_index + 1, s_now_total);
+    } else {
+        snprintf(text, sizeof(text), "%s\n\nTap to go back to the picture", s_play_live ? "Live" : "Recording");
+    }
+    lv_obj_set_style_text_align(d, LV_TEXT_ALIGN_CENTER, 0);
+    lv_label_set_text(d, text);
+    lv_obj_align(d, LV_ALIGN_CENTER, 0, s_play_live ? 50 : 70);
+    if (!s_play_live) {
+        position_line(in, "", tv_playing() ? play_pos_s() : s_play_at_s, 10);
+    }
+    return render(in, LCD_W, LCD_H);
+}
+
+// What a seek tapped so far comes to: "+1:30" over "12:40 / 44:00".
+static int seek_target(void)
+{
+    int to = play_pos_s() + s_seek_s;
+    if (s_play_dur_s && to > s_play_dur_s - 5) {
+        to = s_play_dur_s - 5;
+    }
+    return to < 0 ? 0 : to;
+}
+
+static uint16_t *make_seek(void)
+{
+    lv_obj_t *o = black_screen();
+    char by[16], text[24];
+    fmt_time(by, sizeof(by), abs(s_seek_s));
+    snprintf(text, sizeof(text), "%s%s", s_seek_s < 0 ? "-" : "+", by);
+    lv_obj_t *l = label(o, f28, C_ACCENT);
+    lv_label_set_text(l, text);
+    lv_obj_align(l, LV_ALIGN_CENTER, 0, -40);
+    position_line(o, "→ ", seek_target(), 10);
+    return render(o, LCD_W, LCD_H);
+}
+
+static void retire(uint16_t *img)
+{
+    heap_caps_free(s_ov_old[1]);
+    s_ov_old[1] = s_ov_old[0];
+    s_ov_old[0] = img;
+}
+
+// In the decoder (tv_call_locked), which holds the LVGL lock while the picture plays.
+static void info_locked(void *arg)
+{
+    uint16_t *img = make_info();
+    if (img) {
+        retire(s_ov_info);
+        s_ov_info = img;
+    }
+}
+
+static void seek_locked(void *arg)
+{
+    uint16_t *img = make_seek();
+    if (img) {
+        retire(s_ov_seek);
+        s_ov_seek = img;
+    }
+}
+
 static void make_overlays(const char *title, bool live)
 {
     static const char *const cells[9] = {
@@ -432,6 +583,8 @@ static void make_overlays(const char *title, bool live)
         LV_SYMBOL_LEFT "\nBack", "", LV_SYMBOL_CLOSE "\nHide"};
     heap_caps_free(s_ov_grid);
     heap_caps_free(s_ov_info);
+    heap_caps_free(s_ov_seek);
+    s_ov_seek = NULL;
     lv_obj_t *g = lv_obj_create(lv_screen_active());
     lv_obj_remove_style_all(g);
     lv_obj_set_size(g, LCD_W, LCD_H);
@@ -447,36 +600,17 @@ static void make_overlays(const char *title, bool live)
             lv_obj_set_width(l, 76);
             lv_label_set_long_mode(l, LV_LABEL_LONG_WRAP);
             lv_label_set_text(l, title);
+        } else if (s_seekable && (i == 3 || i == 5)) {
+            lv_label_set_text(l, i == 3 ? LV_SYMBOL_PREV "\n30 s" : LV_SYMBOL_NEXT "\n30 s"); // volume: the keys
         } else {
             lv_label_set_text(l, cells[i]);
         }
         lv_obj_center(l);
     }
     s_ov_grid = render(g, LCD_W, LCD_H);
-    lv_obj_t *in = lv_obj_create(lv_screen_active());
-    lv_obj_remove_style_all(in);
-    lv_obj_set_size(in, LCD_W, LCD_H);
-    lv_obj_set_style_bg_color(in, lv_color_black(), 0);
-    lv_obj_set_style_bg_opa(in, LV_OPA_COVER, 0);
-    lv_obj_t *t = label(in, f22, C_ACCENT);
-    lv_obj_set_width(t, LCD_W - 20);
-    lv_label_set_long_mode(t, LV_LABEL_LONG_WRAP);
-    lv_obj_set_style_text_align(t, LV_TEXT_ALIGN_CENTER, 0);
-    lv_label_set_text(t, title);
-    lv_obj_align(t, LV_ALIGN_CENTER, 0, -30);
-    lv_obj_t *d = label(in, f14, C_DIM);
-    char text[96];
-    if (s_now_index >= 0) {
-        snprintf(text, sizeof(text), "%s, %d of %d\n\nTap to go back to the picture", live ? "Live" : "Recording",
-                 s_now_index + 1, s_now_total);
-    } else {
-        snprintf(text, sizeof(text), "%s\n\nTap to go back to the picture", live ? "Live" : "Recording");
-    }
-    lv_obj_set_style_text_align(d, LV_TEXT_ALIGN_CENTER, 0);
-    lv_label_set_text(d, text);
-    lv_obj_align(d, LV_ALIGN_CENTER, 0, 50);
-    s_ov_info = render(in, LCD_W, LCD_H);
+    s_ov_info = make_info();
 }
+
 
 void ui_tuning_end(void)
 {
@@ -551,7 +685,8 @@ static bool profile_toast(void)
     return true;
 }
 
-static bool start_play(const char *url, const char *title, bool live)
+// at_s: where a recording starts (?t=, for a bridge that seeks)
+static bool start_play(const char *url, const char *title, bool live, int at_s)
 {
     if (s_play_busy) {
         return false;
@@ -565,9 +700,23 @@ static bool start_play(const char *url, const char *title, bool live)
         return false;
     }
     s_play_busy = true;
-    strlcpy(s_play_url, url, sizeof(s_play_url));
-    strlcpy(s_play_title, title, sizeof(s_play_title));
+    char base[256], name[96];
+    strlcpy(base, url, sizeof(base)); // url may be s_play_base itself (a seek)
+    strlcpy(name, title, sizeof(name));
+    strlcpy(s_play_base, base, sizeof(s_play_base));
+    strlcpy(s_play_title, name, sizeof(s_play_title));
     s_play_live = live;
+    s_seekable = !live && bridge_can_seek();
+    s_play_at_s = s_seekable && at_s > 0 ? at_s : 0;
+    s_seek_s = 0;
+    if (s_play_at_s) {
+        char t[16];
+        snprintf(t, sizeof(t), "%st=%d", strchr(base, '?') ? "&" : "?", s_play_at_s);
+        strlcpy(s_play_url, base, sizeof(s_play_url));
+        strlcat(s_play_url, t, sizeof(s_play_url));
+    } else {
+        strlcpy(s_play_url, base, sizeof(s_play_url));
+    }
     if (xTaskCreate(play_task, "play", 6144, NULL, 4, NULL) != pdPASS) {
         s_play_busy = false;
         return false;
@@ -575,12 +724,59 @@ static bool start_play(const char *url, const char *title, bool live)
     return true;
 }
 
+// ---------------------------------------------------------------- resuming recordings
+
+// Where each recording was left, in NVS namespace "resume", keyed by a hash of its id. If NVS
+// fills up, the namespace starts over: these are the first thing to give up.
+static void resume_key(const char *id, char *key)
+{
+    uint32_t h = 2166136261u; // FNV-1a
+    for (const char *c = id; *c; c++) {
+        h = (h ^ (uint8_t)*c) * 16777619u;
+    }
+    sprintf(key, "p%08lx", (unsigned long)h);
+}
+
+static int resume_load(const char *id, int dur_s)
+{
+    char key[16];
+    int32_t at = 0;
+    nvs_handle_t h;
+    resume_key(id, key);
+    if (nvs_open("resume", NVS_READONLY, &h) == ESP_OK) {
+        nvs_get_i32(h, key, &at);
+        nvs_close(h);
+    }
+    return at >= RESUME_MIN_S && (!dur_s || at < dur_s - RESUME_END_S) ? at : 0;
+}
+
+// at_s 0 (or near either end): forget it. Call from a task with its stack in internal RAM.
+static void resume_save(const char *id, int at_s, int dur_s)
+{
+    char key[16];
+    nvs_handle_t h;
+    resume_key(id, key);
+    if (nvs_open("resume", NVS_READWRITE, &h) != ESP_OK) {
+        return;
+    }
+    if (at_s < RESUME_MIN_S || (dur_s && at_s >= dur_s - RESUME_END_S)) {
+        nvs_erase_key(h, key);
+    } else if (nvs_set_i32(h, key, at_s) == ESP_ERR_NVS_NOT_ENOUGH_SPACE) {
+        nvs_erase_all(h);
+        nvs_set_i32(h, key, at_s);
+    }
+    nvs_commit(h);
+    nvs_close(h);
+}
+
 static void play_entry(const char *folder, int index, int total, const cd_entry_t *e)
 {
     strlcpy(s_now_folder, folder, sizeof(s_now_folder));
     s_now_index = index;
     s_now_total = total;
-    start_play(e->url, e->title, e->live);
+    s_play_dur_s = e->live ? 0 : e->duration_s;
+    strlcpy(s_play_id, e->live ? "" : e->id, sizeof(s_play_id));
+    start_play(e->url, e->title, e->live, e->live || !bridge_can_seek() ? 0 : resume_load(e->id, e->duration_s));
 }
 
 // ---------------------------------------------------------------- playback controls
@@ -625,11 +821,64 @@ static void step_item(int dir)
     }
 }
 
+// A tap on a seek key: adds up, shows where it lands, and goes there once the taps stop.
+static void seek_tap(int by_s)
+{
+    s_seek_s += by_s;
+    s_seek_due = esp_timer_get_time() + SEEK_IDLE_MS * 1000LL;
+    if (tv_call_locked(seek_locked, NULL) && s_ov_seek) {
+        overlay(s_ov_seek);
+    }
+}
+
+// The seek tapped (or asked for on the web page) is due: the stream starts again from there.
+static void seek_now(void)
+{
+    int to = seek_target();
+    s_seek_s = 0;
+    overlay(NULL);
+    start_play(s_play_base, s_play_title, false, to);
+}
+
+// While a recording plays, where it is goes to NVS now and then, and when it ends: at the end
+// it's forgotten, otherwise the next start resumes there.
+static void resume_tick(void)
+{
+    static char id[80];
+    static int at_s = -1, dur_s;
+    static int64_t next;
+    int64_t now = esp_timer_get_time();
+    if (tv_playing() && tv_first_picture_ms() && s_play_id[0] && s_seekable) {
+        if (strcmp(id, s_play_id)) {
+            strlcpy(id, s_play_id, sizeof(id));
+            next = now + RESUME_EVERY_US;
+        }
+        at_s = play_pos_s();
+        dur_s = s_play_dur_s;
+        if (now > next) {
+            resume_save(id, at_s, dur_s);
+            next = now + RESUME_EVERY_US;
+        }
+    } else if (at_s >= 0 && !tv_playing()) {
+        resume_save(id, strcmp(tv_end_reason(), "end") ? at_s : 0, dur_s);
+        at_s = -1;
+        id[0] = '\0';
+    }
+}
+
 static void ctl_task(void *arg)
 {
     ctl_t c;
     while (true) {
-        if (!xQueueReceive(s_ctl, &c, pdMS_TO_TICKS(200))) {
+        if (!xQueueReceive(s_ctl, &c, pdMS_TO_TICKS(100))) {
+            resume_tick();
+            if (s_seek_s && esp_timer_get_time() > s_seek_due) {
+                if (tv_playing() && s_seekable && !s_play_busy) {
+                    seek_now();
+                } else {
+                    s_seek_s = 0;
+                }
+            }
             if (s_ov_shown && esp_timer_get_time() > s_ov_until) {
                 overlay(NULL);
             }
@@ -648,7 +897,7 @@ static void ctl_task(void *arg)
         if (c.what != TV_TAP) {
             continue;
         }
-        if (s_ov_shown != s_ov_grid || !s_ov_grid) {
+        if ((s_ov_shown != s_ov_grid && (s_ov_shown != s_ov_seek || !s_ov_seek)) || !s_ov_grid) {
             overlay(s_ov_shown || !s_ov_grid ? NULL : s_ov_grid); // a tap on the picture or the details
             continue;
         }
@@ -656,11 +905,16 @@ static void ctl_task(void *arg)
         int cell = (c.y / 80 > 2 ? 2 : c.y / 80) * 3 + (c.x / 80 > 2 ? 2 : c.x / 80);
         switch (cell) {
         case 0: step_item(-1); break;
-        case 1: overlay(s_ov_info); break;
+        case 1:
+            if (!s_play_live) {
+                tv_call_locked(info_locked, NULL); // where it is now
+            }
+            overlay(s_ov_info);
+            break;
         case 2: step_item(1); break;
-        case 3: app_set_volume(app_volume() - 5); break;
+        case 3: s_seekable ? seek_tap(-SEEK_STEP_S) : app_set_volume(app_volume() - 5); break;
         case 4: overlay(NULL); tv_stop(); break;
-        case 5: app_set_volume(app_volume() + 5); break;
+        case 5: s_seekable ? seek_tap(SEEK_STEP_S) : app_set_volume(app_volume() + 5); break;
         case 6: overlay(NULL); tv_stop(); s_back_wanted = true; break;
         case 8: overlay(NULL); break;
         default: break;
@@ -811,20 +1065,24 @@ static void activate_row(int i)
     if (at_settings()) {
         net_t net;
         char text[200], base[96];
-        switch (i) {
-        case 0:
+        switch (s_stack[s_depth - 1].page * ROWS + i) {
+        case SET_TOUCH:
             s_view = VIEW_CAL;
             s_cal_step = 0;
             break;
-        case 1:
+        case SET_PICTURE:
             bridge_set_profile(!strcmp(bridge_profile(), "esp32_4x3") ? "esp32" : "esp32_4x3");
             settings_rows();
             break;
-        case 2:
+        case SET_ROTATION: // auto, 0, 90, 180, 270, auto, ...
+            rotate_set(rotate_setting() >= 3 ? ROTATE_AUTO : rotate_setting() + 1);
+            settings_rows();
+            break;
+        case SET_FIND:
             bridge_rescan();
             toast("Searching...", 1500);
             break;
-        case 3:
+        case SET_ABOUT:
             app_net(&net);
             bridge_base(base, sizeof(base));
             snprintf(text, sizeof(text), "channelstv %s\n%s\nBridge: %s\n%s", CHANNELSTV_VERSION, net.ip,
@@ -1126,6 +1384,11 @@ static void refresh(lv_timer_t *timer)
         s_back_wanted = false;
         go_back();
     }
+    rotate_hold(s_view == VIEW_CAL); // the touch test needs the panel's own way up
+    if (board_rotation_apply()) {
+        lv_obj_invalidate(lv_screen_active());
+        lv_obj_invalidate(lv_layer_top());
+    }
     net_t net;
     app_net(&net);
     lcolor(s_wifi, !net.connected ? C_BAD : net.rssi > -60 ? C_GOOD : net.rssi > -72 ? C_WARN : C_BAD);
@@ -1384,10 +1647,24 @@ void ui_power_hold(int held_ms)
     lvgl_port_unlock();
 }
 
+bool ui_seek(int by_s, int *at_s, int *dur_s)
+{
+    *at_s = tv_playing() && s_seekable ? play_pos_s() : -1;
+    *dur_s = s_play_dur_s;
+    if (!by_s || !tv_playing() || !s_seekable || s_play_busy) {
+        return false;
+    }
+    s_seek_s += by_s;
+    s_seek_due = esp_timer_get_time(); // ctl_task does it within 100 ms
+    return true;
+}
+
 bool ui_play(const char *url, const char *title, bool live)
 {
     s_now_index = -1; // from the web page: no folder to step through
-    return start_play(url, title, live);
+    s_play_dur_s = 0;
+    s_play_id[0] = '\0';
+    return start_play(url, title, live, 0);
 }
 
 void ui_wake(void)

@@ -43,6 +43,7 @@ static volatile bool s_rescan = true;
 static const char *const s_profiles[2] = {"esp32", "esp32_4x3"};
 static char s_problem[2][96];
 static volatile bool s_recheck;
+static volatile bool s_seek; // the bridge takes ?t= on recordings
 static TaskHandle_t s_task;
 
 // ---------------------------------------------------------------- settings
@@ -300,6 +301,12 @@ static void check_profiles(const char *base, char *buf)
     snprintf(url, sizeof(url), "%s/api/state", base);
     cJSON *root = http_get(url, buf, DESC_MAX, 4000) > 0 ? cJSON_Parse(buf) : NULL;
     const cJSON *clients = cJSON_GetObjectItem(cJSON_GetObjectItem(root, "config"), "clients");
+    const cJSON *f;
+    bool seek = false;
+    cJSON_ArrayForEach(f, cJSON_GetObjectItem(root, "features")) {
+        seek |= cJSON_IsString(f) && !strcmp(f->valuestring, "seek");
+    }
+    s_seek = seek;
     if (cJSON_IsArray(clients)) {
         for (int i = 0; i < 2; i++) {
             profile_problem(clients, s_profiles[i], problem[i], sizeof(problem[i]));
@@ -316,6 +323,11 @@ static void check_profiles(const char *base, char *buf)
             ESP_LOGW(TAG, "bridge profile: %s", problem[i]);
         }
     }
+}
+
+bool bridge_can_seek(void)
+{
+    return s_seek && s_state == BRIDGE_FOUND;
 }
 
 bool bridge_profile_problem(char *out, size_t len)
@@ -622,7 +634,15 @@ static int parse_didl(const char *d, cd_entry_t *out, int max)
         tag_text(start_end, end, "upnp:class", cls, sizeof(cls));
         e->live = strstr(cls, "videoBroadcast") != NULL;
         if (!container) {
-            char url[224] = "";
+            char url[224] = "", dur[24];
+            // <res ... duration="H:MM:SS.mmm">
+            const char *res = strstr(start_end, "<res"), *res_end = res ? strchr(res, '>') : NULL;
+            if (res && res_end && res_end < end && attr(res, res_end, "duration", dur, sizeof(dur))) {
+                int h = 0, m = 0, sec = 0;
+                if (sscanf(dur, "%d:%d:%d", &h, &m, &sec) == 3) {
+                    e->duration_s = h * 3600 + m * 60 + sec;
+                }
+            }
             tag_text(start_end, end, "res", url, sizeof(url));
             unescape(url);
             if (url[0]) {
