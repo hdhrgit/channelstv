@@ -98,6 +98,7 @@ static lv_font_t *f14, *f18, *f22, *f28;
 static lv_obj_t *s_head_back, *s_head, *s_pageno, *s_wifi, *s_batt;
 static bool s_batt_shown;
 static lv_obj_t *s_row[ROWS], *s_row_icon[ROWS], *s_row_text[ROWS];
+static lv_obj_t *s_row_new[ROWS]; // a dot on a recording nobody has watched (upnp:playbackCount 0)
 static lv_obj_t *s_note;       // a message in place of the rows
 static lv_obj_t *s_pad;        // the number pad's grid
 static lv_obj_t *s_cal;        // the touch test's target
@@ -786,6 +787,17 @@ static void resume_save(const char *id, int at_s, int dur_s)
     nvs_close(h);
 }
 
+// Where a recording starts: where the bridge says it was left (upnp:lastPlaybackPosition, shared
+// with the DVR's other players), else where this board left it; 0 within its first 30 s or last
+// minute.
+static int resume_at(const char *id, int bridge_pos_s, int dur_s)
+{
+    if (bridge_pos_s < 0) {
+        return resume_load(id, dur_s);
+    }
+    return bridge_pos_s >= RESUME_MIN_S && (!dur_s || bridge_pos_s < dur_s - RESUME_END_S) ? bridge_pos_s : 0;
+}
+
 static void play_entry(const char *folder, int index, int total, const cd_entry_t *e)
 {
     strlcpy(s_now_folder, folder, sizeof(s_now_folder));
@@ -794,7 +806,7 @@ static void play_entry(const char *folder, int index, int total, const cd_entry_
     s_play_dur_s = e->live ? 0 : e->duration_s;
     strlcpy(s_play_id, e->live ? "" : e->id, sizeof(s_play_id));
     s_offer_seek = !e->live && e->time_seek;
-    start_play(e->url, e->title, e->live, s_offer_seek ? resume_load(e->id, e->duration_s) : 0);
+    start_play(e->url, e->title, e->live, s_offer_seek ? resume_at(e->id, e->last_pos_s, e->duration_s) : 0);
 }
 
 // ---------------------------------------------------------------- playback controls
@@ -1410,6 +1422,7 @@ static void rebuild(void)
             strlcpy(text, e->title, sizeof(text));
         }
         lbl(s_row_text[i], text);
+        show(s_row_new[i], !at_settings() && !e->container && !e->live && e->play_count == 0);
         lbl(s_row_icon[i], at_settings() ? LV_SYMBOL_SETTINGS
                            : !strcmp(e->id, SETTINGS_ID) ? LV_SYMBOL_SETTINGS
                            : e->container ? LV_SYMBOL_DIRECTORY : e->live ? LV_SYMBOL_EYE_OPEN : LV_SYMBOL_VIDEO);
@@ -1582,6 +1595,11 @@ static void build_screen(lv_obj_t *scr)
         s_row[i] = box(scr, 4, HEAD_H + i * ROW_H + 1, LCD_W - 8, ROW_H - 2, C_PANEL);
         s_row_icon[i] = label(s_row[i], &lv_font_montserrat_20, C_ACCENT);
         lv_obj_align(s_row_icon[i], LV_ALIGN_LEFT_MID, 10, 0);
+        s_row_new[i] = box(s_row[i], 31, 7, 11, 11, C_WARN); // on the icon's top right corner
+        lv_obj_set_style_radius(s_row_new[i], LV_RADIUS_CIRCLE, 0);
+        lv_obj_set_style_border_color(s_row_new[i], lv_color_hex(C_PANEL), 0);
+        lv_obj_set_style_border_width(s_row_new[i], 2, 0);
+        lv_obj_add_flag(s_row_new[i], LV_OBJ_FLAG_HIDDEN);
         s_row_text[i] = label(s_row[i], f22, C_TEXT);
         lv_obj_set_size(s_row_text[i], LCD_W - 8 - 46, 28); // one line, cut short with "..."
         lv_label_set_long_mode(s_row_text[i], LV_LABEL_LONG_DOT);
@@ -1772,13 +1790,13 @@ bool ui_seek(int by_s, int *at_s, int *dur_s)
     return true;
 }
 
-bool ui_play(const char *url, const char *title, bool live, const char *id, int dur_s, bool time_seek)
+bool ui_play(const char *url, const char *title, bool live, const char *id, int dur_s, bool time_seek, int last_pos_s)
 {
     s_now_index = -1; // from the web page: no folder to step through
     s_offer_seek = !live && time_seek && id && id[0];
     s_play_dur_s = live ? 0 : dur_s;
     strlcpy(s_play_id, s_offer_seek ? id : "", sizeof(s_play_id));
-    return start_play(url, title, live, s_offer_seek ? resume_load(id, dur_s) : 0);
+    return start_play(url, title, live, s_offer_seek ? resume_at(id, last_pos_s, dur_s) : 0);
 }
 
 void ui_wake(void)

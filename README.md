@@ -100,7 +100,9 @@ The setup page then offers **Back to <network>** for the one just forgotten.
   volume stays on the VOL keys. Taps add up (three taps: 1:30) and the seek happens 0.8 s after
   the last one, showing where it lands ("+1:30", "→ 12:40 / 44:00"). Info shows how far the
   recording has got. A recording left part-way resumes there the next time it's played (the
-  place is kept in NVS; within its first 30 s or last minute it starts from the top). The board
+  place is kept in NVS; within its first 30 s or last minute it starts from the top). Where
+  the bridge says it was left (`upnp:lastPlaybackPosition`, shared with the DVR's other players)
+  comes first. A dot marks recordings not watched yet (`upnp:playbackCount` 0). The board
   asks for the start with a `TimeSeekRange.dlna.org: npt=<seconds>-` request header. A
   recording offered without time seek plays from the start to the end.
 - **Settings:** Touch test (tap five dots; the board works out how the touch panel lines up with
