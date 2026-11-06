@@ -118,19 +118,44 @@ screen says so and the board searches again every 30 seconds.
 uses only that address and doesn't search. If that address doesn't answer, the screen says so.
 Clear the field to go back to finding the bridge automatically.
 
-## Bridge profiles
+## Bridge setup
 
 The board asks for the client profile `esp32` (16:9, 240x144), or `esp32_4x3` (the centre 4:3
 of the picture, 240x192) if that is chosen on the web page. It adds `?profile=<name>` to its
-requests and sends the User-Agent `channelstv/<version>`. Set up these clients on the bridge's
-settings page:
+requests and sends the User-Agent `channelstv/<version>`. Without these clients the bridge sends
+the DVR's original stream, which the board can't decode.
 
-| Client      | Matches                                   | Settings |
-|-------------|-------------------------------------------|----------|
-| `esp32`     | `?profile=esp32`, User-Agent `channelstv` | transcode, 240x144 exact size, 24 fps, H.264 baseline, single slice, 250 kbps video, 64 kbps mono audio, pre-scale |
-| `esp32_4x3` | `?profile=esp32_4x3`                      | the same, with a 4:3 crop at 240x192 |
+The board checks them whenever it finds the bridge: it reads the bridge's `/api/state` (it never
+writes to the bridge) and wants each client to transcode to H.264 `baseline`, one slice a frame
+(`single_slice`), at most 240 pixels wide. If the profile it asks for is missing or different,
+it doesn't play. The screen says "Bridge needs the esp32 profile, see README" with the
+reason, and so do the web page and `/api/status` (`bridge.profile_problem`, and
+`bridge.profiles` for both). A stream that still won't decode ends with the same message.
 
-Without them the bridge sends the DVR's original stream, which the board can't decode.
+Add the two clients on the bridge's settings page, or with `curl` and
+[`jq`](https://jqlang.org/). `PUT /api/config` takes the whole configuration, so this reads the
+current one from `/api/state`, puts the two clients in (replacing any with the same names) and
+sends it back:
+
+```sh
+BRIDGE=http://<bridge-host>:8200
+curl -s $BRIDGE/api/state | jq --argjson new '[
+  {"name": "esp32", "user_agents": ["channelstv"],
+   "profile": {"mode": "transcode", "ads": "cut",
+     "transcode": {"max_width": 240, "max_height": 144, "fps": 24, "video_kbps": 250,
+       "audio_kbps": 64, "audio_channels": 1, "h264_profile": "baseline",
+       "pre_scale": true, "exact_size": true, "single_slice": true}}},
+  {"name": "esp32_4x3",
+   "profile": {"mode": "transcode", "ads": "cut",
+     "transcode": {"max_width": 240, "max_height": 192, "fps": 24, "video_kbps": 250,
+       "audio_kbps": 64, "audio_channels": 1, "h264_profile": "baseline",
+       "pre_scale": true, "exact_size": true, "crop": "4:3", "single_slice": true}}}
+]' '.config | .clients = ([.clients[]? | select(.name != "esp32" and .name != "esp32_4x3")] + $new)' |
+curl -s -X PUT -H 'Content-Type: application/json' --data-binary @- $BRIDGE/api/config
+```
+
+Then tap **Find the bridge again** in Settings (or restart the board) so it checks again.
+`"ads": "cut"` plays recordings without their ads; leave it out to keep them.
 
 ## Building
 

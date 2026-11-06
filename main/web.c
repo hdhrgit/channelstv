@@ -237,6 +237,15 @@ static esp_err_t play(httpd_req_t *req)
         return httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "url=");
     }
     query_str(req, "title", title, sizeof(title));
+    char why[96];
+    if (bridge_profile_problem(why, sizeof(why))) {
+        free(url);
+        cJSON *root = cJSON_CreateObject();
+        cJSON_AddBoolToObject(root, "ok", false);
+        cJSON_AddStringToObject(root, "error", BRIDGE_PROFILE_HELP);
+        cJSON_AddStringToObject(root, "profile_problem", why);
+        return send_json(req, root);
+    }
     bool ok = ui_play(url, title[0] ? title : url, query_int(req, "live", 0));
     free(url);
     return send_raw_json(req, ok ? "{\"ok\":true}" : "{\"ok\":false,\"error\":\"another start is under way\"}");

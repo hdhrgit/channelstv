@@ -21,6 +21,10 @@ bool tv_busy(void);     // the last start failed because the bridge was busy
 // Why the last playback ended (or is ending): "end", "tap", "stopped", "speaker taken", "error".
 const char *tv_end_reason(void);
 const char *tv_error(void);
+// tv_error() when not one picture of the stream would decode (not H.264 Constrained Baseline,
+// or not one slice a frame: the bridge's client profile is missing or wrong)
+#define TV_UNDECODABLE "the stream can't be decoded"
+
 int tv_first_picture_ms(void); // from the start to the first picture, 0 if none yet
 // The next frame drawn, as I420 (w x h, Y stride w; it sits centred on the screen), for
 // /api/screen. NULL if no picture is up or none came within timeout_ms. The buffer stays

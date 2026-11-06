@@ -201,6 +201,8 @@ static void show(lv_obj_t *o, bool on)
 
 static void toast(const char *text, int ms)
 {
+    // a wrapped label sized to its content comes out a line short: long ones get the full width
+    lv_obj_set_width(s_toast, strlen(text) > 20 ? LCD_W - 16 : LV_SIZE_CONTENT);
     lv_label_set_text(s_toast, text);
     lv_obj_remove_flag(s_toast, LV_OBJ_FLAG_HIDDEN);
     s_toast_until = esp_timer_get_time() + ms * 1000LL;
@@ -517,9 +519,13 @@ static void play_task(void *arg)
         lvgl_port_unlock();
     }
     if (!started || (!tv_playing() && !tv_first_picture_ms() && strcmp(tv_end_reason(), "stopped"))) {
-        char text[160];
+        char text[200], why[96];
         snprintf(text, sizeof(text), "%s\n%s", tv_busy() ? "The bridge is busy" : "Can't play this",
                  tv_busy() ? "it runs all the conversions it allows" : tv_error());
+        bool undecodable = !strcmp(tv_error(), TV_UNDECODABLE) || strstr(tv_error(), "doesn't fit");
+        if (undecodable && bridge_recheck_profiles() && bridge_profile_problem(why, sizeof(why))) {
+            snprintf(text, sizeof(text), "%s\n(%s)", BRIDGE_PROFILE_HELP, why);
+        }
         if (lvgl_port_lock(500)) {
             toast(text, 4000);
             lvgl_port_unlock();
@@ -532,9 +538,30 @@ static void play_task(void *arg)
     vTaskDelete(NULL);
 }
 
+// Says so (and plays nothing) when the bridge's client profile can't give a stream the board
+// decodes. Call with the LVGL lock held.
+static bool profile_toast(void)
+{
+    char why[96], text[200];
+    if (!bridge_profile_problem(why, sizeof(why))) {
+        return false;
+    }
+    snprintf(text, sizeof(text), "%s\n(%s)", BRIDGE_PROFILE_HELP, why);
+    toast(text, 6000);
+    return true;
+}
+
 static bool start_play(const char *url, const char *title, bool live)
 {
     if (s_play_busy) {
+        return false;
+    }
+    char why[96];
+    if (bridge_profile_problem(why, sizeof(why))) {
+        if (lvgl_port_lock(100)) { // recursive: fine from a tap, which holds it already
+            profile_toast();
+            lvgl_port_unlock();
+        }
         return false;
     }
     s_play_busy = true;
@@ -1109,6 +1136,7 @@ static void refresh(lv_timer_t *timer)
         s_stack[0].page = 0;
         if (bridge_state() == BRIDGE_FOUND) {
             request_page();
+            profile_toast();
         }
     }
     if (s_setup_gen != setup_gen()) {
@@ -1373,6 +1401,7 @@ void ui_wake(void)
 void ui_show_volume(int volume)
 {
     if (lvgl_port_lock(100)) {
+        lv_obj_set_width(s_toast, LV_SIZE_CONTENT);
         lv_label_set_text_fmt(s_toast, "%s  %d%%", volume ? LV_SYMBOL_VOLUME_MAX : LV_SYMBOL_MUTE, volume);
         lv_obj_remove_flag(s_toast, LV_OBJ_FLAG_HIDDEN);
         s_toast_until = esp_timer_get_time() + 1500000;

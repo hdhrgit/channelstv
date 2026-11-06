@@ -58,5 +58,16 @@ typedef struct {
 // and sets *total, or -1 if the bridge couldn't be reached (and searches for it again).
 int bridge_browse(const char *id, int start, int max, cd_entry_t *out, int *total);
 
-// {"state":..,"base":..,"name":..,"found_by":..,"override":..,"profile":..,"udn":..}
+// What is wrong with the bridge's client profile the board asks for (bridge_profile()): no such
+// client, not transcoding, not H.264 baseline, not one slice a frame, wider than 240. False if
+// it's fine, or the bridge's settings couldn't be read. Checked whenever the bridge is found.
+bool bridge_profile_problem(char *out, size_t len);
+// Reads the bridge's client profiles again, now (blocks for up to 4 s); true if the one the
+// board asks for is wrong.
+bool bridge_recheck_profiles(void);
+// The message the screen and the web page show for a wrong profile
+#define BRIDGE_PROFILE_HELP "Bridge needs the esp32 profile, see README"
+
+// {"state":..,"base":..,"name":..,"found_by":..,"override":..,"profile":..,"udn":..,
+//  "profile_problem":"" or why, "profiles":{"esp32":"ok" or why,"esp32_4x3":..}}
 void bridge_status_json(char *out, size_t len);
