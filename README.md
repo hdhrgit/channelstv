@@ -109,6 +109,10 @@ The setup page then offers **Back to <network>** for the one just forgotten.
   runs the panel's own way up.
 - **Keys:** PWR stops playback, or goes back a folder. Hold PWR for 3 s to power off on battery.
   VOL+ and VOL- change the volume.
+- **Web control** (Settings): **read-only** by default, which serves only the status page and
+  `/api/status`; **full** allows everything below; **off** runs no web server. Only a finger on
+  the board loosens it, never the network. OTA updates keep their own switch, and the setup
+  hotspot's page works whatever it says.
 - **Web page:** `http://<board-ip>/` shows the status, the bridge it uses, a browser for the same
   folders and a picture of the screen. It also sets the bridge address, the picture shape and
   the volume. The API is listed in [`main/web.h`](main/web.h); `/api/touch` acts as a finger

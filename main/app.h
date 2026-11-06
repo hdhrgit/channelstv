@@ -30,6 +30,15 @@ bool app_previous_wifi(char *ssid, size_t ssid_len, char *password, size_t pass_
 bool app_ota_enabled(void);
 void app_set_ota_enabled(bool on);
 
+// What the web page and API may do: WEB_FULL everything, WEB_READ_ONLY the status page and
+// GET /api/status only (POST /api/ota keeps to its own switch), WEB_OFF no web server at all
+// (but for the setup hotspot's page). Saved in NVS; read-only on a fresh install and on a board
+// updated from a build without it. Loosened only with a finger on the board (Settings -> Web
+// control), never from the network.
+typedef enum { WEB_FULL, WEB_READ_ONLY, WEB_OFF } web_mode_t;
+web_mode_t app_web_mode(void);
+void app_set_web_mode(web_mode_t mode);
+
 // Why the board last started: "power-on", "panic", "watchdog", "brownout", "software", ...
 const char *app_reset_reason(void);
 

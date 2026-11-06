@@ -1,4 +1,6 @@
-// Web page and API on port 80:
+// Web page and API on port 80. Settings -> Web control (app.h): with read-only only GET / and
+// GET /api/status (and POST /api/ota, under its own switch) answer, the rest 403; with off,
+// nothing runs. While the setup hotspot is open its page and /api/wifi* always answer.
 //   GET  /                      status and settings
 //   GET  /api/status            Wi-Fi, battery, memory, the bridge and playback
 //   GET  /api/settings[?bridge=host[:port]][&profile=esp32|esp32_4x3][&volume=0..100]
@@ -26,4 +28,6 @@
 //   POST /api/wifi/forget       forget the network and restart into the setup hotspot
 #pragma once
 
-void web_start(void);
+// Starts or stops the web server as Web control says (app.h): running unless it's off, and
+// always while the setup hotspot is open. Call again whenever either changes.
+void web_apply(void);

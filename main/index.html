@@ -38,6 +38,8 @@
 <div class="card"><dl id="status"><dt>Status</dt><dd>loading...</dd></dl></div>
 <div class="hint"><a href="/wifi">Change the Wi-Fi network</a></div>
 
+<div id="locked" class="card hint" hidden>Web control is <b id="lockmode"></b>: only the status shows here. Change it on the board: Settings → Web control.</div>
+<div id="controls">
 <h2>Bridge</h2>
 <div class="card">
   <label for="bridge">Bridge address</label>
@@ -74,6 +76,7 @@
 <h2>Screen</h2>
 <img id="shot" alt="the board's screen">
 <div><button class="plain" id="snap">Refresh</button></div>
+</div>
 </main>
 <script>
 const $ = id => document.getElementById(id);
@@ -95,8 +98,14 @@ async function refresh() {
       ['Firmware', `v${esc(s.fw)} (${esc(s.partition)}), IDF ${esc(s.idf)}, up ${Math.round(s.uptime_s / 60)} min`],
     ];
     $('status').innerHTML = rows.map(([k, v]) => `<dt>${k}</dt><dd>${v}</dd>`).join('');
-    if (!loaded) {
+    const full = !s.web_control || s.web_control === 'full';
+    $('controls').hidden = !full;
+    $('locked').hidden = full;
+    $('lockmode').textContent = s.web_control;
+    if (!loaded && full) {
       loaded = true;
+      browse();
+      snap();
       $('bridge').value = b.override || '';
       $('profile').value = b.profile || 'esp32';
       $('volume').value = s.volume;
@@ -148,8 +157,6 @@ const snap = () => $('shot').src = '/api/screen?t=' + Date.now();
 $('snap').onclick = snap;
 
 refresh();
-browse();
-snap();
 setInterval(refresh, 3000);
 </script>
 </body>

@@ -63,6 +63,7 @@ void app_set_volume(int v)
 }
 
 static bool s_ota_on;
+static web_mode_t s_web_mode = WEB_READ_ONLY;
 
 static void volume_load(void)
 {
@@ -72,6 +73,9 @@ static void volume_load(void)
         if (nvs_get_i32(h, "volume", &v) == ESP_OK) {
             s_volume = v;
         }
+        if (nvs_get_i32(h, "web_mode", &v) == ESP_OK && v >= WEB_FULL && v <= WEB_OFF) {
+            s_web_mode = v;
+        }
         if (nvs_get_i32(h, "ota_on", &v) == ESP_OK) {
             s_ota_on = v != 0;
         } else if (nvs_get_i32(h, "volume", &v) == ESP_OK) {
@@ -79,6 +83,31 @@ static void volume_load(void)
         }
         nvs_close(h);
     }
+}
+
+web_mode_t app_web_mode(void)
+{
+    return s_web_mode;
+}
+
+// Stopping the server waits for its handlers, one of which may be waiting for the LVGL lock
+// that a tap in Settings holds: done from a task of its own.
+static void web_apply_task(void *arg)
+{
+    web_apply();
+    vTaskDelete(NULL);
+}
+
+void app_set_web_mode(web_mode_t mode)
+{
+    s_web_mode = mode;
+    nvs_handle_t h;
+    if (nvs_open("channelstv", NVS_READWRITE, &h) == ESP_OK) {
+        nvs_set_i32(h, "web_mode", mode);
+        nvs_commit(h);
+        nvs_close(h);
+    }
+    xTaskCreate(web_apply_task, "webapply", 4096, NULL, 4, NULL);
 }
 
 bool app_ota_enabled(void)
@@ -207,6 +236,7 @@ static void open_setup(void)
     memset(&s_before, 0, sizeof(s_before));
     esp_wifi_get_config(WIFI_IF_STA, &s_before);
     setup_start(s_before.sta.ssid[0] ? (const char *)s_before.sta.ssid : NULL);
+    web_apply(); // the hotspot's page, even with Web control off
 }
 
 static void retry(void *arg)
@@ -416,7 +446,7 @@ void app_main(void)
     board_keys_start(on_key);
     wifi_start();
     bridge_start(app_online);
-    web_start();
+    web_apply();
     xTaskCreate(console_task, "console", 3072, NULL, 3, NULL);
     esp_pm_config_t pm = {.max_freq_mhz = 240, .min_freq_mhz = 80, .light_sleep_enable = false};
     esp_pm_lock_create(ESP_PM_CPU_FREQ_MAX, 0, "busy", &s_busy_lock);

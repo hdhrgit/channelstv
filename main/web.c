@@ -141,6 +141,8 @@ static esp_err_t status(httpd_req_t *req)
     const esp_partition_t *run = esp_ota_get_running_partition();
     cJSON_AddStringToObject(root, "partition", run ? run->label : "");
     cJSON_AddBoolToObject(root, "ota_enabled", app_ota_enabled());
+    static const char *const modes[] = {"full", "read-only", "off"};
+    cJSON_AddStringToObject(root, "web_control", modes[app_web_mode()]);
     net_t net;
     app_net(&net);
     cJSON *wifi = cJSON_AddObjectToObject(root, "wifi");
@@ -538,40 +540,78 @@ static esp_err_t ota(httpd_req_t *req)
     return ESP_OK;
 }
 
-void web_start(void)
+// ---------------------------------------------------------------- web control
+
+// Who may use each address: anyone, the OTA switch, Web control Full (or the setup hotspot, for
+// its own page), or Web control Full alone.
+typedef enum { ANYONE, OTA_SWITCH, SETUP, FULL } access_t;
+typedef struct {
+    esp_err_t (*fn)(httpd_req_t *req);
+    access_t access;
+} route_t;
+
+static esp_err_t gate(httpd_req_t *req)
 {
+    const route_t *r = req->user_ctx;
+    bool ok = r->access == ANYONE || r->access == OTA_SWITCH || app_web_mode() == WEB_FULL ||
+              (r->access == SETUP && setup_active());
+    if (!ok) {
+        return httpd_resp_send_err(req, HTTPD_403_FORBIDDEN,
+                                   "Web control is read-only: change it on the board, Settings -> Web control");
+    }
+    return r->fn(req);
+}
+
+static httpd_handle_t s_server;
+
+void web_apply(void)
+{
+    bool want = app_web_mode() != WEB_OFF || setup_active();
+    if (!want && s_server) {
+        httpd_stop(s_server);
+        s_server = NULL;
+    }
+    if (!want || s_server) {
+        return;
+    }
     httpd_config_t cfg = HTTPD_DEFAULT_CONFIG();
     cfg.stack_size = 8192;
     cfg.max_uri_handlers = 24;
     cfg.recv_wait_timeout = 15;
     // a browser keeps several connections open per page: close the idlest instead of refusing
     cfg.lru_purge_enable = true;
-    httpd_handle_t h;
-    if (httpd_start(&h, &cfg) != ESP_OK) {
+    if (httpd_start(&s_server, &cfg) != ESP_OK) {
+        s_server = NULL;
         return;
     }
-    const httpd_uri_t uris[] = {
-        {.uri = "/", .method = HTTP_GET, .handler = page},
-        {.uri = "/api/status", .method = HTTP_GET, .handler = status},
-        {.uri = "/api/settings", .method = HTTP_GET, .handler = settings},
-        {.uri = "/api/rescan", .method = HTTP_GET, .handler = rescan},
-        {.uri = "/api/browse", .method = HTTP_GET, .handler = browse},
-        {.uri = "/api/play", .method = HTTP_GET, .handler = play},
-        {.uri = "/api/stop", .method = HTTP_GET, .handler = stop},
-        {.uri = "/api/seek", .method = HTTP_GET, .handler = seek},
-        {.uri = "/api/rotation", .method = HTTP_GET, .handler = rotation},
-        {.uri = "/api/tv", .method = HTTP_GET, .handler = tv},
-        {.uri = "/api/touch", .method = HTTP_GET, .handler = touch},
-        {.uri = "/api/screen", .method = HTTP_GET, .handler = screen},
-        {.uri = "/api/ota", .method = HTTP_POST, .handler = ota},
-        {.uri = "/wifi", .method = HTTP_GET, .handler = wifi_page},
-        {.uri = "/api/wifi", .method = HTTP_GET, .handler = wifi_state},
-        {.uri = "/api/wifi", .method = HTTP_POST, .handler = wifi_set},
-        {.uri = "/api/wifi/scan", .method = HTTP_GET, .handler = wifi_scan},
-        {.uri = "/api/wifi/forget", .method = HTTP_POST, .handler = wifi_forget},
+    static const struct {
+        const char *uri;
+        httpd_method_t method;
+        route_t route;
+    } uris[] = {
+        {"/", HTTP_GET, {page, ANYONE}}, // the setup page while the hotspot is open
+        {"/api/status", HTTP_GET, {status, ANYONE}},
+        {"/api/ota", HTTP_POST, {ota, OTA_SWITCH}},
+        {"/wifi", HTTP_GET, {wifi_page, SETUP}},
+        {"/api/wifi", HTTP_GET, {wifi_state, SETUP}},
+        {"/api/wifi", HTTP_POST, {wifi_set, SETUP}},
+        {"/api/wifi/scan", HTTP_GET, {wifi_scan, SETUP}},
+        {"/api/wifi/forget", HTTP_POST, {wifi_forget, SETUP}},
+        {"/api/settings", HTTP_GET, {settings, FULL}},
+        {"/api/rescan", HTTP_GET, {rescan, FULL}},
+        {"/api/browse", HTTP_GET, {browse, FULL}},
+        {"/api/play", HTTP_GET, {play, FULL}},
+        {"/api/stop", HTTP_GET, {stop, FULL}},
+        {"/api/seek", HTTP_GET, {seek, FULL}},
+        {"/api/rotation", HTTP_GET, {rotation, FULL}},
+        {"/api/tv", HTTP_GET, {tv, FULL}},
+        {"/api/touch", HTTP_GET, {touch, FULL}},
+        {"/api/screen", HTTP_GET, {screen, FULL}},
     };
     for (size_t i = 0; i < sizeof(uris) / sizeof(uris[0]); i++) {
-        httpd_register_uri_handler(h, &uris[i]);
+        httpd_uri_t u = {.uri = uris[i].uri, .method = uris[i].method, .handler = gate,
+                         .user_ctx = (void *)&uris[i].route};
+        httpd_register_uri_handler(s_server, &u);
     }
-    httpd_register_err_handler(h, HTTPD_404_NOT_FOUND, not_found);
+    httpd_register_err_handler(s_server, HTTPD_404_NOT_FOUND, not_found);
 }

@@ -222,12 +222,14 @@ static bool at_settings(void)
     return !strcmp(s_stack[s_depth - 1].id, SETTINGS_ID);
 }
 
-enum { SET_TOUCH, SET_PICTURE, SET_ROTATION, SET_OTA, SET_FIND, SET_ABOUT, SET_N };
+enum { SET_TOUCH, SET_PICTURE, SET_ROTATION, SET_OTA, SET_WEB, SET_FIND, SET_ABOUT, SET_N };
 
 // Settings, a page at a time like any folder.
 static void settings_rows(void)
 {
-    static const char *const titles[SET_N] = {"Touch test", "Picture", "Rotation", "OTA updates", "Find the bridge again", "About"};
+    static const char *const titles[SET_N] = {"Touch test", "Picture", "Rotation", "OTA updates", "Web control",
+                                              "Find the bridge again", "About"};
+    static const char *const web[] = {"full", "read-only", "off"};
     static const char *const rotations[] = {"auto", "0\u00b0", "90\u00b0", "180\u00b0", "270\u00b0"};
     int first = s_stack[s_depth - 1].page * ROWS;
     s_count = 0;
@@ -237,6 +239,8 @@ static void settings_rows(void)
         snprintf(e->id, sizeof(e->id), "#set%d", k);
         if (k == SET_PICTURE) {
             snprintf(e->title, sizeof(e->title), "Picture: %s", !strcmp(bridge_profile(), "esp32_4x3") ? "4:3 centre" : "16:9");
+        } else if (k == SET_WEB) {
+            snprintf(e->title, sizeof(e->title), "Web control: %s", web[app_web_mode()]);
         } else if (k == SET_OTA) {
             snprintf(e->title, sizeof(e->title), "OTA updates: %s", app_ota_enabled() ? "on" : "off");
         } else if (k == SET_ROTATION) {
@@ -1119,6 +1123,14 @@ static void activate_row(int i)
                 break;
             }
             app_set_ota_enabled(!app_ota_enabled());
+            settings_rows();
+            break;
+        case SET_WEB: // read-only, off, full, read-only, ...
+            if (s_api_touch) {
+                toast("Only a finger on the board changes this", 3000); // not /api/touch
+                break;
+            }
+            app_set_web_mode(app_web_mode() == WEB_READ_ONLY ? WEB_OFF : app_web_mode() == WEB_OFF ? WEB_FULL : WEB_READ_ONLY);
             settings_rows();
             break;
         case SET_FIND:

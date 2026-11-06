@@ -14,6 +14,8 @@
 #include "lwip/sockets.h"
 #include "cJSON.h"
 
+#include "web.h"
+
 static const char *TAG = "setup";
 
 #define TRIES      3        // failed joins before giving up on a network ...
@@ -139,6 +141,7 @@ static void close_hotspot(void *arg)
     esp_wifi_set_mode(WIFI_MODE_STA);
     esp_wifi_set_ps(WIFI_PS_MIN_MODEM);
     set_status("", false);
+    web_apply(); // with Web control off, the server goes with the hotspot
 }
 
 void setup_start(const char *saved)

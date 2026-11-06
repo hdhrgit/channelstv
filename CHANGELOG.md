@@ -1,5 +1,11 @@
 # Changelog
 
+## v0.2.1 (unreleased)
+
+- Settings → Web control: full, read-only (the default, also after updating) or off. Read-only
+  serves the status page and `/api/status` only; off runs no web server. Only a finger on the
+  board loosens it. OTA updates keep their own switch; the setup hotspot's page always works.
+
 ## v0.2.0
 
 - Release images from GitHub Actions: `full.bin` (first install at `0x0`, USB or the browser),
