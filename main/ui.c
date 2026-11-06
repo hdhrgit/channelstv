@@ -1436,8 +1436,8 @@ static void battery_line(void)
         s_batt_shown = shown;
         show(s_batt, shown);
         lv_obj_set_width(s_pageno, shown ? 36 : 50);
-        lv_obj_align(s_pageno, LV_ALIGN_TOP_RIGHT, shown ? -76 : -26, 9);
-        lv_obj_set_width(s_head, LCD_W - 34 - (shown ? 116 : 70));
+        lv_obj_align(s_pageno, LV_ALIGN_TOP_RIGHT, shown ? -86 : -26, 9);
+        lv_obj_set_width(s_head, LCD_W - 34 - (shown ? 126 : 70));
     }
     if (shown) {
         char text[24];
@@ -1555,7 +1555,7 @@ static void build_screen(lv_obj_t *scr)
     lv_label_set_text(s_wifi, LV_SYMBOL_WIFI);
     lv_obj_align(s_wifi, LV_ALIGN_TOP_RIGHT, -6, 9);
     s_batt = label(scr, f14, C_TEXT); // "87%" and the battery's symbol (DejaVu, then Montserrat's)
-    lv_obj_set_width(s_batt, 50);
+    lv_obj_set_width(s_batt, 60); // "100%" and the symbol
     lv_label_set_long_mode(s_batt, LV_LABEL_LONG_CLIP); // one line, never wrapped under the heading
     lv_obj_set_style_text_align(s_batt, LV_TEXT_ALIGN_RIGHT, 0);
     lv_obj_align(s_batt, LV_ALIGN_TOP_RIGHT, -24, 9);
