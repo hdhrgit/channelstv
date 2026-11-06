@@ -1,0 +1,72 @@
+# Builds the firmware on every push and pull request. A v* tag also publishes a GitHub Release
+# with the full image (flash at 0x0), the app image (for /api/ota) and their SHA-256 sums.
+name: build
+
+on:
+  push:
+    branches: ["**"]
+    tags: ["v*"]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Version
+        id: ver
+        run: |
+          if [ "${GITHUB_REF_TYPE}" = tag ]; then
+            echo "name=${GITHUB_REF_NAME}" >> "$GITHUB_OUTPUT"
+            echo "arg=-DPROJECT_VER=${GITHUB_REF_NAME#v}" >> "$GITHUB_OUTPUT"
+          else
+            echo "name=${GITHUB_SHA::7}" >> "$GITHUB_OUTPUT"
+            echo "arg=" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Build
+        uses: espressif/esp-idf-ci-action@v1
+        with:
+          esp_idf_version: v5.4.2
+          target: esp32s3
+          command: >-
+            idf.py ${{ steps.ver.outputs.arg }} build &&
+            cd build &&
+            esptool.py --chip esp32s3 merge_bin -o ../channelstv-${{ steps.ver.outputs.name }}-full.bin @flash_args &&
+            cp channelstv.bin ../channelstv-${{ steps.ver.outputs.name }}-ota.bin
+
+      - name: Checksums
+        run: sha256sum channelstv-*-full.bin channelstv-*-ota.bin > SHA256SUMS && cat SHA256SUMS
+
+      - name: Scan the images for private strings
+        run: tools/scan-artifacts.sh channelstv-*-full.bin channelstv-*-ota.bin
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: channelstv-${{ steps.ver.outputs.name }}
+          path: |
+            channelstv-*-full.bin
+            channelstv-*-ota.bin
+            SHA256SUMS
+
+  release:
+    if: github.ref_type == 'tag'
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: channelstv-${{ github.ref_name }}
+      - uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            channelstv-*-full.bin
+            channelstv-*-ota.bin
+            SHA256SUMS
+          generate_release_notes: true
