@@ -51,7 +51,12 @@ typedef struct {
     int children;     // a container's childCount, -1 if it didn't say
     bool live;        // a channel (upnp:class ...videoBroadcast): endless
     char url[256];    // an item's stream, with the profile asked for
+    int duration_s;   // a recording's length (without its ads if they are cut), 0 if unknown
 } cd_entry_t;
+
+// The bridge starts a recording's stream at ?t=<seconds> (it says "features":["seek"] in its
+// /api/state). Known once the bridge is found.
+bool bridge_can_seek(void);
 
 // Browses the children of container `id` ("0" is the top), from `start`, at most `max`.
 // Blocks for up to a few seconds (call from a background task). Returns how many came back

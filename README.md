@@ -83,6 +83,13 @@ The setup page then offers **Back to <network>** for the one just forgotten.
   down / Info / channel up, volume down / Stop / volume up, Back / the title / Hide. Swipe up or
   down for the next or previous channel (the next or previous item of the folder), swipe right
   to stop.
+- **Recordings:** with a bridge that can start a recording part-way (it lists `"seek"` in the
+  `features` of its `/api/state`), the controls' volume keys become ⏮ 30 s and ⏭ 30 s; the
+  volume stays on the VOL keys. Taps add up (three taps: 1:30) and the seek happens 0.8 s after
+  the last one, showing where it lands ("+1:30", "→ 12:40 / 44:00"). Info shows how far the
+  recording has got. A recording left part-way resumes there the next time it's played (the
+  place is kept in NVS; within its first 30 s or last minute it starts from the top). Without
+  that bridge feature, recordings play from the start to the end.
 - **Settings:** Touch test (tap five dots; the board works out how the touch panel lines up with
   the screen and keeps it), the picture shape (16:9 or the centre 4:3), Find the bridge again,
   About.
@@ -97,7 +104,6 @@ The setup page then offers **Back to <network>** for the one just forgotten.
 Live channels keep about 8 seconds in hand, so the gaps in the bridge's delivery don't stall the
 picture. Anything beyond that is trimmed by playing 4 % faster (one audio frame in 25 left
 out); if the board falls minutes behind, it skips ahead to what the bridge has just received.
-Recordings play from the start to the end, without seeking.
 
 ## Finding the bridge
 
