@@ -502,7 +502,8 @@ EXT_RAM_BSS_ATTR static uint32_t s_perf_us[PERF_N];
 EXT_RAM_BSS_ATTR static struct { int64_t pts; uint32_t hash; } s_perf_hash[HASH_N];
 static volatile int s_perf_n, s_hash_n;
 static volatile bool s_perf_hashing;
-static int64_t s_perf_t0, s_perf_idle0[2];
+static int64_t s_perf_t0;
+static uint32_t s_perf_idle0[2];
 static int s_dec_int, s_dec_psram; // bytes the decoder took, at open and with its first picture
 
 static uint32_t fnv1a(const uint8_t *p, size_t n)
@@ -514,9 +515,9 @@ static uint32_t fnv1a(const uint8_t *p, size_t n)
     return h;
 }
 
-static int64_t idle_us(int core)
+static uint32_t idle_us(int core) // the run-time stats clock is esp_timer's (microseconds)
 {
-    return ulTaskGetRunTimeCounter(xTaskGetIdleTaskHandleForCore(core));
+    return ulTaskGetIdleRunTimeCounterForCore(core);
 }
 
 void tv_perf_reset(int hashing)
@@ -556,8 +557,8 @@ void tv_perf_json(char *out, size_t len)
     }
     free(v);
     int64_t dt = esp_timer_get_time() - s_perf_t0;
-    float load0 = dt > 0 ? 100.0f - 100.0f * (idle_us(0) - s_perf_idle0[0]) / dt : 0;
-    float load1 = dt > 0 ? 100.0f - 100.0f * (idle_us(1) - s_perf_idle0[1]) / dt : 0;
+    float load0 = dt > 0 ? 100.0f - 100.0f * (uint32_t)(idle_us(0) - s_perf_idle0[0]) / dt : 0;
+    float load1 = dt > 0 ? 100.0f - 100.0f * (uint32_t)(idle_us(1) - s_perf_idle0[1]) / dt : 0;
     snprintf(out, len,
              "{\"decoder\":\"%s\",\"frames\":%d,\"mean_ms\":%.2f,\"p50_ms\":%.2f,\"p95_ms\":%.2f,\"p99_ms\":%.2f,"
              "\"max_ms\":%.2f,\"window_s\":%.1f,\"cpu0_load\":%.1f,\"cpu1_load\":%.1f,\"dec_internal\":%d,"
