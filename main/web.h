@@ -13,7 +13,8 @@
 //                               calibration and the last touch points, raw and mapped
 //   GET  /api/screen            what the screen shows, as a 240x240 BMP (the way the board draws
 //                               it, before the panel turns it)
-//   GET  /api/rotation[?set=auto|0..3][&axes=0..7][&fake=x,y,z|off]  the screen's rotation;
+//   GET  /api/rotation[?set=auto|0..3][&fake=x,y,z|off]  the screen's rotation (quarter turns
+//                               clockwise);
 //                               fake= stands in for the motion sensor (in g), for tests
 //   POST /api/ota               raw app image: flash it to the spare slot and reboot
 //   GET  /wifi                  the Wi-Fi setup page (also "/" while the setup hotspot is open)
