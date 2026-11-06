@@ -140,9 +140,9 @@ Only a finger on the board loosens it; the web page, the API and `/api/touch` ca
 which works the same way. While the setup hotspot is open, its page and `/api/wifi*` answer
 whatever Web control says.
 
-With Web control **full**, the page shows the status, browses the bridge's folders and plays
-from them, sets the bridge address, the picture shape, the rotation and the volume, and shows a
-picture of the screen. The API (all `GET` unless shown):
+With Web control **full**, the page shows the status, browses the bridge's folders, searches
+titles and plays from them, sets the bridge address, the picture shape, the rotation and the
+volume, and shows a picture of the screen. The API (all `GET` unless shown):
 
 | Address | What it does | Read-only |
 |---|---|---|
@@ -152,7 +152,8 @@ picture of the screen. The API (all `GET` unless shown):
 | `/api/settings?bridge=host[:port]&profile=esp32\|esp32_4x3&volume=0..100` | sets any of them; `bridge=` empty goes back to finding it | |
 | `/api/rescan` | looks for the bridge again | |
 | `/api/browse?id=ID&start=N` | a page of a folder (`0` is the top) | |
-| `/api/play?url=U&title=T&live=1`, `/api/stop` | plays a stream, stops | |
+| `/api/search?q=WORDS&start=N` | recordings, movies and shows whose titles hold every word; `{"no_search":true}` if the bridge can't search (the page then looks through its folders) | |
+| `/api/play?url=U&title=T&live=1&id=ID&duration=S&seek=1`, `/api/stop` | plays a stream, stops; `id`, `duration` and `seek` (from `/api/browse`) give a recording its seek keys, position and resume | |
 | `/api/seek?by=±seconds` | where a recording is; `by=` seeks it | |
 | `/api/tv` | playback progress and the stream's state | |
 | `/api/touch?gesture=tap\|long\|up\|down\|left\|right&x=&y=` | acts as a finger would; the last touch points | |
