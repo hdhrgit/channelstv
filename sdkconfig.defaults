@@ -40,3 +40,6 @@ CONFIG_ESP_H264_DECODER_IRAM=y
 # streaming bursts fill WiFi's dynamic RX buffers (1.6 KB each, internal RAM)
 CONFIG_ESP_WIFI_DYNAMIC_RX_BUFFER_NUM=16
 CONFIG_PM_ENABLE=y
+# LVGL's bundled examples and demos: not used, only build time
+CONFIG_LV_BUILD_EXAMPLES=n
+CONFIG_LV_BUILD_DEMOS=n
