@@ -688,7 +688,19 @@ static bool profile_toast(void)
     return true;
 }
 
-// at_s: where a recording starts (?t=, for a bridge that seeks)
+// How a recording's stream is asked to start at_s seconds in: the one place that knows the
+// bridge's way of seeking (now ?t=<seconds> on the stream URL).
+static void seek_request(char *url, size_t len, const char *base, int at_s)
+{
+    strlcpy(url, base, len);
+    if (at_s > 0) {
+        char t[16];
+        snprintf(t, sizeof(t), "%st=%d", strchr(base, '?') ? "&" : "?", at_s);
+        strlcat(url, t, len);
+    }
+}
+
+// at_s: where a recording starts, for a bridge that seeks
 static bool start_play(const char *url, const char *title, bool live, int at_s)
 {
     if (s_play_busy) {
@@ -712,14 +724,7 @@ static bool start_play(const char *url, const char *title, bool live, int at_s)
     s_seekable = !live && bridge_can_seek();
     s_play_at_s = s_seekable && at_s > 0 ? at_s : 0;
     s_seek_s = 0;
-    if (s_play_at_s) {
-        char t[16];
-        snprintf(t, sizeof(t), "%st=%d", strchr(base, '?') ? "&" : "?", s_play_at_s);
-        strlcpy(s_play_url, base, sizeof(s_play_url));
-        strlcat(s_play_url, t, sizeof(s_play_url));
-    } else {
-        strlcpy(s_play_url, base, sizeof(s_play_url));
-    }
+    seek_request(s_play_url, sizeof(s_play_url), base, s_play_at_s);
     if (xTaskCreate(play_task, "play", 6144, NULL, 4, NULL) != pdPASS) {
         s_play_busy = false;
         return false;
@@ -835,11 +840,25 @@ static void seek_tap(int by_s)
 }
 
 // The seek tapped (or asked for on the web page) is due: the stream starts again from there.
+static void grid_locked(void *arg)
+{
+    make_overlays(s_play_title, s_play_live);
+}
+
+// Asks the bridge first whether it still seeks (it may have been changed since it was found):
+// one that doesn't would only start the recording again from the top. Then the controls go
+// back to volume keys instead.
 static void seek_now(void)
 {
     int to = seek_target();
     s_seek_s = 0;
     overlay(NULL);
+    bridge_recheck_profiles();
+    if (!bridge_can_seek()) {
+        s_seekable = false;
+        tv_call_locked(grid_locked, NULL);
+        return;
+    }
     start_play(s_play_base, s_play_title, false, to);
 }
 

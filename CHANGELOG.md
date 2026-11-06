@@ -8,13 +8,13 @@
   picks the Wi-Fi network. The hotspot also opens if the saved network is gone for two minutes.
 - The board checks the bridge's `esp32` and `esp32_4x3` client profiles and says what's wrong
   instead of a black screen.
-- Recordings: ⏮ 30 s / ⏭ 30 s in the playback controls, a position bar in Info, and resume
-  where a recording was left.
+- Recordings: a position bar in Info.
 - The screen turns with the board (auto, or a fixed rotation in Settings).
 - OTA updates are off until turned on in Settings on the board.
+- Ready for seeking (30 s keys, resume where left) once the bridge has seek support.
 
 Needs: the DLNA bridge for Channels DVR with the `esp32` client profiles (README, Bridge setup);
-seeking needs a bridge that lists `seek` in its features.
+seeking needs a bridge with seek support (coming).
 
 Limits: the Waveshare ESP32-S3-Touch-LCD-1.54 only; the setup hotspot is open (no password)
 while it runs; the web page and API have no login.
