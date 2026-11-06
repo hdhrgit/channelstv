@@ -21,11 +21,13 @@
 #include "freertos/task.h"
 #include "freertos/queue.h"
 #include "freertos/stream_buffer.h"
+#include "esp_attr.h"
 #include "esp_heap_caps.h"
 #include "esp_log.h"
 #include "esp_lvgl_port.h"
 #include "esp_timer.h"
 #include "lvgl.h"
+#include "sdkconfig.h"
 #include "src/display/lv_display_private.h"
 
 #include "board.h"
@@ -491,6 +493,100 @@ static volatile bool s_demux_running;
 static volatile bool s_busy;
 static uint32_t s_restarts, s_epochs, s_skipped, s_audio_gaps, s_audio_late, s_audio_gap_ms;
 static uint32_t s_late_decoded; // frames the decoder finished after their time (dropped for it)
+
+// Experiment (exp/videojet): every decode time since the last reset, the decoder's own heap
+// use, CPU load per core, and with hashing on a hash of each decoded picture by its PTS.
+#define PERF_N 8192
+#define HASH_N 2048
+EXT_RAM_BSS_ATTR static uint32_t s_perf_us[PERF_N];
+EXT_RAM_BSS_ATTR static struct { int64_t pts; uint32_t hash; } s_perf_hash[HASH_N];
+static volatile int s_perf_n, s_hash_n;
+static volatile bool s_perf_hashing;
+static int64_t s_perf_t0, s_perf_idle0[2];
+static int s_dec_int, s_dec_psram; // bytes the decoder took, at open and with its first picture
+
+static uint32_t fnv1a(const uint8_t *p, size_t n)
+{
+    uint32_t h = 2166136261u;
+    while (n--) {
+        h = (h ^ *p++) * 16777619u;
+    }
+    return h;
+}
+
+static int64_t idle_us(int core)
+{
+    return ulTaskGetRunTimeCounter(xTaskGetIdleTaskHandleForCore(core));
+}
+
+void tv_perf_reset(int hashing)
+{
+    s_perf_n = 0;
+    s_hash_n = 0;
+    if (hashing >= 0) {
+        s_perf_hashing = hashing;
+    }
+    s_perf_t0 = esp_timer_get_time();
+    s_perf_idle0[0] = idle_us(0);
+    s_perf_idle0[1] = idle_us(1);
+}
+
+static int cmp_u32(const void *a, const void *b)
+{
+    uint32_t x = *(const uint32_t *)a, y = *(const uint32_t *)b;
+    return x < y ? -1 : x > y;
+}
+
+void tv_perf_json(char *out, size_t len)
+{
+    int n = s_perf_n < PERF_N ? s_perf_n : PERF_N;
+    uint32_t *v = heap_caps_malloc((n ? n : 1) * sizeof(uint32_t), MALLOC_CAP_SPIRAM);
+    double sum = 0;
+    uint32_t p50 = 0, p95 = 0, p99 = 0, max = 0;
+    if (v && n) {
+        memcpy(v, s_perf_us, n * sizeof(uint32_t));
+        qsort(v, n, sizeof(uint32_t), cmp_u32);
+        for (int i = 0; i < n; i++) {
+            sum += v[i];
+        }
+        p50 = v[n / 2];
+        p95 = v[(n * 95) / 100];
+        p99 = v[(n * 99) / 100];
+        max = v[n - 1];
+    }
+    free(v);
+    int64_t dt = esp_timer_get_time() - s_perf_t0;
+    float load0 = dt > 0 ? 100.0f - 100.0f * (idle_us(0) - s_perf_idle0[0]) / dt : 0;
+    float load1 = dt > 0 ? 100.0f - 100.0f * (idle_us(1) - s_perf_idle0[1]) / dt : 0;
+    snprintf(out, len,
+             "{\"decoder\":\"%s\",\"frames\":%d,\"mean_ms\":%.2f,\"p50_ms\":%.2f,\"p95_ms\":%.2f,\"p99_ms\":%.2f,"
+             "\"max_ms\":%.2f,\"window_s\":%.1f,\"cpu0_load\":%.1f,\"cpu1_load\":%.1f,\"dec_internal\":%d,"
+             "\"dec_psram\":%d,\"int_free\":%u,\"int_min\":%u,\"int_largest\":%u,\"psram_free\":%u,"
+             "\"psram_min\":%u,\"hashes\":%d}",
+#if CONFIG_CHANNELSTV_DEC_VIDEOJET
+             "videojet",
+#else
+             "esp_h264",
+#endif
+             n, n ? sum / n / 1000 : 0, p50 / 1000.0, p95 / 1000.0, p99 / 1000.0, max / 1000.0, dt / 1e6, load0, load1,
+             s_dec_int, s_dec_psram, (unsigned)heap_caps_get_free_size(MALLOC_CAP_INTERNAL),
+             (unsigned)heap_caps_get_minimum_free_size(MALLOC_CAP_INTERNAL),
+             (unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL),
+             (unsigned)heap_caps_get_free_size(MALLOC_CAP_SPIRAM), (unsigned)heap_caps_get_minimum_free_size(MALLOC_CAP_SPIRAM),
+             s_hash_n);
+}
+
+// "pts hash" lines from index from, at most len bytes
+int tv_perf_hashes(char *out, size_t len, int from)
+{
+    size_t o = 0;
+    int i = from;
+    for (; i < s_hash_n && o + 32 < len; i++) {
+        o += snprintf(out + o, len - o, "%lld %08lx\n", (long long)s_perf_hash[i].pts, (unsigned long)s_perf_hash[i].hash);
+    }
+    out[o] = 0;
+    return i;
+}
 static uint32_t s_starved;      // times the decoder waited for a picture from the network
 static uint32_t s_cc_errors, s_packets, s_au_bytes; // copied from the demuxer, for the status
 static const char *volatile s_dstate = "", *volatile s_vstate = "";
@@ -880,7 +976,10 @@ static void tv_video_task(void *arg)
     }
     s_free_q = xQueueCreate(NUM_FB, sizeof(int));
     s_full_q = xQueueCreate(NUM_FB + 4, sizeof(frame_t)); // + the end marker and idle ticks
+    size_t int0 = heap_caps_get_free_size(MALLOC_CAP_INTERNAL), ps0 = heap_caps_get_free_size(MALLOC_CAP_SPIRAM);
     h264dec_t *hdec = h264dec_open();
+    s_dec_int = int0 - heap_caps_get_free_size(MALLOC_CAP_INTERNAL);
+    s_dec_psram = ps0 - heap_caps_get_free_size(MALLOC_CAP_SPIRAM);
     RAM_AT(2);
     bool locked = false;
     bool fbs = s_strip[0] && s_strip[1];
@@ -994,8 +1093,18 @@ static void tv_video_task(void *arg)
         if (s_stop) {
             break;
         }
+        size_t int1 = 0, ps1 = 0;
+        if (!decoded) {
+            int1 = heap_caps_get_free_size(MALLOC_CAP_INTERNAL);
+            ps1 = heap_caps_get_free_size(MALLOC_CAP_SPIRAM);
+        }
         int64_t a = esp_timer_get_time();
         int r = h264dec_frame(hdec, au + AU_HEAD, len, s_fb[fr.buf], w, h, NULL);
+        int64_t took = esp_timer_get_time() - a;
+        if (!decoded && r > 0) {
+            s_dec_int += int1 - heap_caps_get_free_size(MALLOC_CAP_INTERNAL);
+            s_dec_psram += ps1 - heap_caps_get_free_size(MALLOC_CAP_SPIRAM);
+        }
         if (r <= 0) {
             if (r < 0) {
                 snprintf(s_error, sizeof(s_error), "H.264 decode error (%d bytes)", len);
@@ -1010,8 +1119,17 @@ static void tv_video_task(void *arg)
             xQueueSend(s_free_q, &fr.buf, 0);
             continue;
         }
-        dec_us += esp_timer_get_time() - a;
+        dec_us += took;
         s_decode_ms = dec_us / 1000.0f / ++decoded;
+        if (s_perf_n < PERF_N) {
+            s_perf_us[s_perf_n] = took;
+        }
+        s_perf_n++;
+        if (s_perf_hashing && s_hash_n < HASH_N) {
+            s_perf_hash[s_hash_n].pts = pts;
+            s_perf_hash[s_hash_n].hash = fnv1a(s_fb[fr.buf], w * h * 3 / 2);
+            s_hash_n++;
+        }
         if (s_preroll_done && s_clk.audio && player_position_ms() > fr.due_ms + s_frame_us / 1000) {
             s_late_decoded++;
         }

@@ -50,3 +50,8 @@ void tv_overlay(const uint16_t *img);
 const uint16_t *tv_overlay_shown(void);
 // {"title":..,"playing":..,"live":..,"fps":..,"shown":..,"dropped":..,...,"source":{...}}
 void tv_status_json(char *out, size_t len);
+// Experiment: decode-time statistics, CPU load and heap since tv_perf_reset() (hashing: 1 on, 0 off, -1 as is),
+// and the decoded pictures' hashes ("pts hash" lines from index from; returns the next index).
+void tv_perf_reset(int hashing);
+void tv_perf_json(char *out, size_t len);
+int tv_perf_hashes(char *out, size_t len, int from);

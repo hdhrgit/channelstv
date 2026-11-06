@@ -1,5 +1,6 @@
-// H.264 for the video player, see h264dec.h. Decoding is Espressif's tinyH264 port; the
-// colour conversion is table driven, since the straightforward version cost ~12 ms a frame.
+// H.264 for the video player, see h264dec.h. Decoding is Espressif's tinyH264 port or VideoJet
+// (Settings -> channelstv -> H.264 decoder); the colour conversion is table driven, since the
+// straightforward version cost ~12 ms a frame.
 
 #include "h264dec.h"
 #include "board.h"
@@ -8,11 +9,20 @@
 #include <string.h>
 #include "esp_attr.h"
 #include "esp_heap_caps.h"
-#include "esp_h264_dec_sw.h"
 #include "esp_timer.h"
+#include "sdkconfig.h"
+#if CONFIG_CHANNELSTV_DEC_VIDEOJET
+#include "videojet.h"
+#else
+#include "esp_h264_dec_sw.h"
+#endif
 
 struct h264dec {
+#if CONFIG_CHANNELSTV_DEC_VIDEOJET
+    vj_decoder_t *dec;
+#else
     esp_h264_dec_handle_t dec;
+#endif
     int coded_w, coded_h;
 };
 
@@ -190,6 +200,69 @@ void h264dec_init(void)
     tables_init();
 }
 
+#if CONFIG_CHANNELSTV_DEC_VIDEOJET
+h264dec_t *h264dec_open(void)
+{
+    tables_init();
+    h264dec_t *d = calloc(1, sizeof(*d));
+    if (d && !(d->dec = vj_decoder_create())) {
+        free(d);
+        d = NULL;
+    }
+    return d;
+}
+
+void h264dec_close(h264dec_t *d)
+{
+    if (d) {
+        vj_decoder_destroy(d->dec);
+        free(d);
+    }
+}
+
+int h264dec_frame(h264dec_t *d, const uint8_t *data, int len, uint8_t *out, int w, int h, int64_t *convert_us)
+{
+    // VideoJet takes one access unit per call and removes its emulation-prevention bytes in
+    // place: tv.c's AU buffer is writable and each AU is decoded once
+    uint8_t *au = (uint8_t *)data;
+    int got = 0;
+    for (size_t off = 0, n; off < (size_t)len; off += n) {
+        n = vj_au_length(au + off, len - off);
+        if (!n) {
+            break;
+        }
+        vj_frame_t f;
+        vj_status_t st = vj_decode_au(d->dec, au + off, n, &f);
+        if (st < 0) {
+            return -1;
+        }
+        if (st != VJ_FRAME) {
+            continue;
+        }
+        d->coded_w = f.width;
+        d->coded_h = f.height;
+        if (w > f.width || h > f.height) {
+            return -1;
+        }
+        int64_t a = esp_timer_get_time();
+        // the visible w x h as compact I420 (stride w), from the top left as before
+        uint8_t *ou = out + w * h, *ov = ou + (w / 2) * (h / 2);
+        for (int y = 0; y < h; y++) {
+            memcpy(out + y * w, f.y + y * f.y_stride, w);
+        }
+        for (int y = 0; y < h / 2; y++) {
+            memcpy(ou + y * (w / 2), f.u + y * f.uv_stride, w / 2);
+            memcpy(ov + y * (w / 2), f.v + y * f.uv_stride, w / 2);
+        }
+        if (convert_us) {
+            *convert_us = esp_timer_get_time() - a;
+        }
+        got = 1;
+    }
+    return got;
+}
+
+#else
 h264dec_t *h264dec_open(void)
 {
     tables_init();
@@ -263,6 +336,8 @@ int h264dec_frame(h264dec_t *d, const uint8_t *data, int len, uint8_t *out, int 
     }
     return got;
 }
+
+#endif
 
 bool h264_is_keyframe(const uint8_t *data, int len)
 {

@@ -11,4 +11,18 @@ config CHANNELSTV_WIFI_PASSWORD
     string "Wi-Fi password"
     default ""
 
+choice CHANNELSTV_H264_DECODER
+    prompt "H.264 decoder"
+    default CHANNELSTV_DEC_ESP_H264
+    help
+        The software decoder for the video. Both decode constrained baseline, one access unit at a time.
+
+config CHANNELSTV_DEC_ESP_H264
+    bool "esp_h264 (Espressif's tinyH264 port)"
+
+config CHANNELSTV_DEC_VIDEOJET
+    bool "VideoJet (h264bsd with PIE SIMD kernels, components/videojet)"
+
+endchoice
+
 endmenu

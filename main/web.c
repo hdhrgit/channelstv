@@ -444,6 +444,35 @@ static esp_err_t tv(httpd_req_t *req)
     return err;
 }
 
+// Experiment: /api/perf[?reset=1][&hash=0|1], /api/perf/hashes[?from=N]
+static esp_err_t perf(httpd_req_t *req)
+{
+    if (query_int(req, "reset", 0)) {
+        tv_perf_reset(query_int(req, "hash", -1));
+    }
+    char *buf = malloc(1024);
+    if (!buf) {
+        return httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "memory");
+    }
+    tv_perf_json(buf, 1024);
+    esp_err_t err = send_raw_json(req, buf);
+    free(buf);
+    return err;
+}
+
+static esp_err_t perf_hashes(httpd_req_t *req)
+{
+    char *buf = heap_caps_malloc(32768, MALLOC_CAP_SPIRAM);
+    if (!buf) {
+        return httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "memory");
+    }
+    tv_perf_hashes(buf, 32768, query_int(req, "from", 0));
+    httpd_resp_set_type(req, "text/plain");
+    esp_err_t err = httpd_resp_sendstr(req, buf);
+    free(buf);
+    return err;
+}
+
 // What the screen shows, as a 24-bit BMP: the current frame while something plays (the draw
 // task hands over a copy of the next one it draws) or the overlay over it, otherwise the LVGL screen with the top layer
 // ("Tuning", toasts) blended over it.
@@ -733,6 +762,8 @@ void web_apply(void)
         {"/api/seek", HTTP_GET, {seek, FULL}},
         {"/api/rotation", HTTP_GET, {rotation, FULL}},
         {"/api/tv", HTTP_GET, {tv, FULL}},
+        {"/api/perf", HTTP_GET, {perf, FULL}},
+        {"/api/perf/hashes", HTTP_GET, {perf_hashes, FULL}},
         {"/api/touch", HTTP_GET, {touch, FULL}},
         {"/api/screen", HTTP_GET, {screen, FULL}},
     };
