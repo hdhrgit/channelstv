@@ -153,6 +153,7 @@ static esp_err_t status(httpd_req_t *req)
     battery_t bat;
     board_battery(&bat);
     cJSON *b = cJSON_AddObjectToObject(root, "battery");
+    cJSON_AddBoolToObject(b, "present", bat.mv > 0); // the radio firmware's sign of a battery: a reading
     cJSON_AddNumberToObject(b, "mv", bat.mv);
     cJSON_AddNumberToObject(b, "percent", bat.percent);
     cJSON_AddBoolToObject(b, "charging", bat.charging);

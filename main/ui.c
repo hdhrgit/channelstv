@@ -95,7 +95,8 @@ typedef enum { VIEW_LIST, VIEW_PAD, VIEW_CAL } view_t;
 typedef enum { G_NONE, G_TAP, G_LONG, G_UP, G_DOWN, G_LEFT, G_RIGHT } gesture_t;
 
 static lv_font_t *f14, *f18, *f22, *f28;
-static lv_obj_t *s_head_back, *s_head, *s_pageno, *s_wifi;
+static lv_obj_t *s_head_back, *s_head, *s_pageno, *s_wifi, *s_batt;
+static bool s_batt_shown;
 static lv_obj_t *s_row[ROWS], *s_row_icon[ROWS], *s_row_text[ROWS];
 static lv_obj_t *s_note;       // a message in place of the rows
 static lv_obj_t *s_pad;        // the number pad's grid
@@ -1419,6 +1420,34 @@ static void rebuild(void)
     }
 }
 
+// The battery in the heading, as the radio firmware on this board shows it: whenever the ADC
+// gives a reading (it has no other sign of a battery), the percentage and a symbol; the charge
+// symbol while charging; red at 15 % and under on battery. The heading's page number and title
+// make room for it.
+static const char *battery_symbol(int pct)
+{
+    return pct > 80 ? LV_SYMBOL_BATTERY_FULL : pct > 55 ? LV_SYMBOL_BATTERY_3
+         : pct > 30 ? LV_SYMBOL_BATTERY_2 : pct > 10 ? LV_SYMBOL_BATTERY_1 : LV_SYMBOL_BATTERY_EMPTY;
+}
+
+static void battery_line(void)
+{
+    bool shown = s_bat.mv > 0;
+    if (shown != s_batt_shown) {
+        s_batt_shown = shown;
+        show(s_batt, shown);
+        lv_obj_set_width(s_pageno, shown ? 36 : 50);
+        lv_obj_align(s_pageno, LV_ALIGN_TOP_RIGHT, shown ? -74 : -26, 9);
+        lv_obj_set_width(s_head, LCD_W - 34 - (shown ? 116 : 70));
+    }
+    if (shown) {
+        char text[24];
+        snprintf(text, sizeof(text), "%d%%%s", s_bat.percent, s_bat.charging ? LV_SYMBOL_CHARGE : battery_symbol(s_bat.percent));
+        lbl(s_batt, text);
+        lcolor(s_batt, s_bat.percent <= 15 && !s_bat.charging ? C_BAD : C_DIM);
+    }
+}
+
 static void refresh(lv_timer_t *timer)
 {
     int64_t now = esp_timer_get_time();
@@ -1447,6 +1476,7 @@ static void refresh(lv_timer_t *timer)
     net_t net;
     app_net(&net);
     lcolor(s_wifi, !net.connected ? C_BAD : net.rssi > -60 ? C_GOOD : net.rssi > -72 ? C_WARN : C_BAD);
+    battery_line();
     // the bridge found (again) or lost: start over from the top
     if (s_bridge_gen != bridge_gen()) {
         s_bridge_gen = bridge_gen();
@@ -1506,7 +1536,7 @@ static void build_power_overlay(void)
 
 static void build_screen(lv_obj_t *scr)
 {
-    // the heading: back at the left end, the folder's name, the page, Wi-Fi
+    // the heading: back at the left end, the folder's name, the page, the battery, Wi-Fi
     s_head_back = label(scr, &lv_font_montserrat_20, C_ACCENT);
     lv_label_set_text(s_head_back, LV_SYMBOL_LEFT);
     lv_obj_align(s_head_back, LV_ALIGN_TOP_LEFT, 8, 6);
@@ -1521,6 +1551,11 @@ static void build_screen(lv_obj_t *scr)
     s_wifi = label(scr, &lv_font_montserrat_14, C_DIM);
     lv_label_set_text(s_wifi, LV_SYMBOL_WIFI);
     lv_obj_align(s_wifi, LV_ALIGN_TOP_RIGHT, -6, 9);
+    s_batt = label(scr, f14, C_TEXT); // "87%" and the battery's symbol (DejaVu, then Montserrat's)
+    lv_obj_set_width(s_batt, 46);
+    lv_obj_set_style_text_align(s_batt, LV_TEXT_ALIGN_RIGHT, 0);
+    lv_obj_align(s_batt, LV_ALIGN_TOP_RIGHT, -24, 9);
+    lv_obj_add_flag(s_batt, LV_OBJ_FLAG_HIDDEN);
 
     for (int i = 0; i < ROWS; i++) {
         s_row[i] = box(scr, 4, HEAD_H + i * ROW_H + 1, LCD_W - 8, ROW_H - 2, C_PANEL);

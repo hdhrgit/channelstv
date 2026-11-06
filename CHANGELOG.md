@@ -5,6 +5,8 @@
 - Settings → Web control: full, read-only (the default, also after updating) or off. Read-only
   serves the status page and `/api/status` only; off runs no web server. Only a finger on the
   board loosens it. OTA updates keep their own switch; the setup hotspot's page always works.
+- The battery in the screen's heading: percentage and symbol (the charge symbol while charging),
+  red at 15 % and under; `/api/status` says whether a battery reads.
 
 ## v0.2.0
 
