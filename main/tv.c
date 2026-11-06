@@ -189,6 +189,12 @@ static int64_t clock_ms(clock_t_ *c)
     if (!c->audio) {
         return (now - c->t0_us) / 1000;
     }
+    if (!s_preroll_done) {
+        // the sound hasn't started: the clock stands still at the first picture (running it on
+        // the wall clock let the picture play ahead of the sound, then drop a second of frames)
+        c->last_at_us = now;
+        return c->last_pos;
+    }
     if (player_is_playing() && player_gen() == s_audio_gen) {
         int64_t p = player_position_ms();
         if (p != c->last_pos) {
@@ -219,7 +225,9 @@ static clock_t_ s_clk;
 static volatile bool s_draw_running;
 static volatile int s_pic_w, s_pic_h;           // the stream's picture
 static volatile bool s_banner_want;             // "Catching up..." under the picture
-static uint16_t *s_banner;                      // panel-order RGB565, LCD_W x BANNER_H, in PSRAM
+static uint16_t *volatile s_banner;             // panel-order RGB565, LCD_W x BANNER_H, in PSRAM: the
+                                                // one shown (one of the two below)
+static uint16_t *s_banner_catch, *s_banner_buf; // "Catching up...", "Buffering..."
 #define BANNER_H 20
 static const char *volatile s_drstate = ""; // where the draw task is (debug)
 static const uint16_t *volatile s_overlay;  // drawn over the whole screen instead of the picture
@@ -398,9 +406,13 @@ typedef struct {
     struct { int64_t pts; int off, len; } held[HOLD_N];
 } demux_t;
 
-#define PREROLL_BYTES (32 * 1024) // ~4 s of the bridge's sound
-#define PREBUFFER_MS  1000        // the sound starts with at least this much in hand ...
-#define PREBUFFER_WAIT_MS 3000    // ... or this long after the first picture, whichever first
+#define PREROLL_BYTES (96 * 1024) // ~12 s of the bridge's sound
+#define PREBUFFER_MS  6000        // the sound starts with at least this much in hand ...
+#define PREBUFFER_WAIT_MS 12000   // ... or this long after the first picture, whichever first.
+                                  // Meanwhile the first picture stays up, with "Buffering..."
+                                  // under it: started with only a second in hand, live TV
+                                  // stalled a few times in its first minutes, until the gaps
+                                  // in the bridge's delivery had built up a cushion
 #define LEAD_MS 6000              // how far the demuxer may run ahead of the sound being heard:
                                   // a burst from the server then waits in the ring (and TCP)
                                   // instead of taking core 0 from the decoder
@@ -728,6 +740,7 @@ static void tv_demux_task(void *arg)
         if (s_live && !stream_catching_up(s_src) && stream_full_ms(s_src) >= CATCH_UP_FULL_MS &&
             now - last_catch_up > CATCH_UP_FULL_MS * 1000LL) {
             last_catch_up = now;
+            s_banner = s_banner_catch;
             s_banner_want = true;
             stream_catch_up(s_src);
         }
@@ -777,7 +790,7 @@ static void tv_demux_task(void *arg)
 
 // The sound (and with it the clock) starts once the first frame is up, the decoder is a full
 // set of frames ahead (started any sooner, the start-up burst on core 0 left the decoder
-// behind and a second of frames came out late) and a second of sound is in hand.
+// behind and a second of frames came out late) and PREBUFFER_MS of sound is in hand.
 static void preroll_check(int decoded)
 {
     if (s_preroll_done || decoded < NUM_FB || !s_shown) {
@@ -786,6 +799,7 @@ static void preroll_check(int decoded)
     int64_t since_ms = (esp_timer_get_time() - s_start_us) / 1000 - s_first_ms;
     if (s_pend_ms >= PREBUFFER_MS || since_ms >= PREBUFFER_WAIT_MS) {
         s_preroll_done = true;
+        s_banner_want = false; // "Buffering..." goes
         RAM_AT(5);
     }
 }
@@ -851,7 +865,10 @@ static void tv_video_task(void *arg)
     locked = true;
     ui_tuning_end();
     ui_backlight_full();
-    s_banner = ui_banner("Catching up...", LCD_W, BANNER_H);
+    s_banner_catch = ui_banner("Catching up...", LCD_W, BANNER_H);
+    s_banner_buf = ui_banner("Buffering...", LCD_W, BANNER_H);
+    s_banner = s_banner_buf;
+    s_banner_want = true; // until the pre-roll is done
     vTaskDelay(pdMS_TO_TICKS(20));
     memset(s_strip[0], 0, LCD_W * STRIP_LINES * 2);
     for (int y = 0; y < LCD_H; y += STRIP_LINES) {
@@ -961,8 +978,10 @@ done:
     }
     task_reap(&s_demux_task);
     s_vstate = "idle";
-    heap_caps_free(s_banner);
     s_banner = NULL;
+    heap_caps_free(s_banner_catch);
+    heap_caps_free(s_banner_buf);
+    s_banner_catch = s_banner_buf = NULL;
     s_banner_want = false;
     ts_free(&s_dm->ts);
     heap_caps_free(s_dm->pend);
