@@ -1,12 +1,15 @@
 # Changelog
 
-## v0.2.1 (unreleased)
+## v0.2.1
 
 - Settings → Web control: full, read-only (the default, also after updating) or off. Read-only
   serves the status page and `/api/status` only; off runs no web server. Only a finger on the
   board loosens it. OTA updates keep their own switch; the setup hotspot's page always works.
 - The battery in the screen's heading: percentage and symbol (the charge symbol while charging),
   red at 15 % and under; `/api/status` says whether a battery reads.
+- The heading's title, page number and battery no longer cut or wrap each other (the number
+  pad's typed channel shows again).
+- README: a demo GIF of the board.
 
 ## v0.2.0
 
