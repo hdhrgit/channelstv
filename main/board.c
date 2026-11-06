@@ -224,9 +224,9 @@ static void touch_map(esp_lcd_touch_handle_t tp, uint16_t *x, uint16_t *y, uint1
         // the calibration is the panel's own way up: turn the point as the picture is turned
         int px = mx;
         switch (s_rot) {
-        case 1: mx = my; my = LCD_W - 1 - px; break;
+        case 1: mx = LCD_H - 1 - my; my = px; break;
         case 2: mx = LCD_W - 1 - mx; my = LCD_H - 1 - my; break;
-        case 3: mx = LCD_H - 1 - my; my = px; break;
+        case 3: mx = my; my = LCD_W - 1 - px; break;
         default: break;
         }
         x[0] = mx;
@@ -530,7 +530,8 @@ bool board_accel(float *x, float *y, float *z)
 // ---------------------------------------------------------------- rotation
 
 // The ST7789 turns the picture itself (MADCTL); its memory is 240 x 320, so the two
-// rotations that count from its far end need an 80 line offset.
+// rotations that count from its far end need an 80 line offset (the same offsets as the
+// radio firmware on this board: 80 across at 90 degrees, 80 down at 180).
 void board_rotation_want(int r)
 {
     s_rot_want = r & 3;
@@ -546,7 +547,7 @@ bool board_rotation_apply(void)
     static const struct {
         bool swap, mx, my;
         int gx, gy;
-    } t[4] = {{false, false, false, 0, 0}, {true, true, false, 0, 0}, {false, true, true, 0, 80}, {true, false, true, 80, 0}};
+    } t[4] = {{false, false, false, 0, 0}, {true, false, true, 80, 0}, {false, true, true, 0, 80}, {true, true, false, 0, 0}};
     int r = s_rot_want;
     if (r == s_rot || !s_panel) {
         return false;

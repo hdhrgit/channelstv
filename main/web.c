@@ -252,15 +252,12 @@ static esp_err_t play(httpd_req_t *req)
     return send_raw_json(req, ok ? "{\"ok\":true}" : "{\"ok\":false,\"error\":\"another start is under way\"}");
 }
 
-// ?set=auto|0..3, ?axes=0..7, ?fake=x,y,z (g) or fake=off; the rotation either way.
+// ?set=auto|0..3, ?fake=x,y,z (g) or fake=off; the rotation either way.
 static esp_err_t rotation(httpd_req_t *req)
 {
     char v[40];
     if (query_str(req, "set", v, sizeof(v))) {
         rotate_set(!strcmp(v, "auto") ? ROTATE_AUTO : atoi(v));
-    }
-    if (query_str(req, "axes", v, sizeof(v))) {
-        rotate_set_axes(atoi(v));
     }
     if (query_str(req, "fake", v, sizeof(v))) {
         float x, y, z;

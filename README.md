@@ -96,7 +96,8 @@ The setup page then offers **Back to <network>** for the one just forgotten.
 - **Rotation:** by default the screen turns with the board. The motion sensor (QMI8658) says
   which edge is down; the picture turns once the board has stayed that way for a second, and
   not while it lies flat. Settings, the web page and `/api/rotation` set it to auto or a fixed
-  0°, 90°, 180° or 270° instead. The touch test always runs the panel's own way up.
+  0°, 90°, 180° or 270° (the board turned clockwise that far) instead. The touch test always
+  runs the panel's own way up.
 - **Keys:** PWR stops playback, or goes back a folder. Hold PWR for 3 s to power off on battery.
   VOL+ and VOL- change the volume.
 - **Web page:** `http://<board-ip>/` shows the status, the bridge it uses, a browser for the same

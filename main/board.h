@@ -64,8 +64,9 @@ float board_chip_temp(void);
 float board_imu_temp(void);
 // The QMI8658's acceleration in g on its own axes; false without it.
 bool board_accel(float *x, float *y, float *z);
-// The panel's rotation, 0..3 quarter turns: the picture's top at the panel's top, right,
-// bottom or left edge. Touches are turned with it. board_rotation_want() asks for one;
+// The panel's rotation: how many quarter turns clockwise the board is turned from upright
+// (0..3), so the picture's top is at the panel's top, left, bottom or right edge. Touches are
+// turned with it. board_rotation_want() asks for one;
 // board_rotation_apply() makes it, from whoever draws on the panel at the time (the LVGL task,
 // or playback's draw task); true if it changed, and the whole screen needs drawing again.
 void board_rotation_want(int r);
