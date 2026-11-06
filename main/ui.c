@@ -150,6 +150,7 @@ static battery_t s_bat;
 static int64_t s_bat_at;
 
 static void rebuild(void);
+static void head_fit(void);
 
 static lv_font_t *ttf(int size)
 {
@@ -1354,6 +1355,7 @@ static void rebuild(void)
     show(s_cal, s_view == VIEW_CAL);
     show(s_head_back, s_depth > 1 || s_view != VIEW_LIST);
     lbl(s_pageno, "");
+    head_fit();
     if (s_view == VIEW_CAL) {
         rows_hidden();
         lbl(s_head, "Touch test");
@@ -1418,11 +1420,23 @@ static void rebuild(void)
         snprintf(p, sizeof(p), "%d/%d", lv->page + 1, pages);
         lbl(s_pageno, p);
     }
+    head_fit();
 }
 
 // The battery in the heading whenever the ADC gives a reading (the radio firmware's sign of a
 // battery): the percentage and a symbol on battery, red at 15 % and under; the charge symbol
 // and a symbol while charging. The heading's page number and title make room for it.
+// The heading's title takes what the page number (when there is one), the battery and Wi-Fi
+// leave: the number pad's typed channel needs it.
+static void head_fit(void)
+{
+    int right = 26 + (s_batt_shown ? 62 : 0) + (lv_label_get_text(s_pageno)[0] ? 42 : 0);
+    int w = LCD_W - 34 - right;
+    if (lv_obj_get_width(s_head) != w) {
+        lv_obj_set_width(s_head, w);
+    }
+}
+
 static const char *battery_symbol(int pct)
 {
     return pct > 80 ? LV_SYMBOL_BATTERY_FULL : pct > 55 ? LV_SYMBOL_BATTERY_3
@@ -1437,7 +1451,7 @@ static void battery_line(void)
         show(s_batt, shown);
         lv_obj_set_width(s_pageno, shown ? 36 : 50);
         lv_obj_align(s_pageno, LV_ALIGN_TOP_RIGHT, shown ? -86 : -26, 9);
-        lv_obj_set_width(s_head, LCD_W - 34 - (shown ? 126 : 70));
+        head_fit();
     }
     if (shown) {
         char text[24];
