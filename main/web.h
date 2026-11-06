@@ -11,6 +11,11 @@
 //                               calibration and the last touch points, raw and mapped
 //   GET  /api/screen            what the screen shows, as a 240x240 BMP
 //   POST /api/ota               raw app image: flash it to the spare slot and reboot
+//   GET  /wifi                  the Wi-Fi setup page (also "/" while the setup hotspot is open)
+//   GET  /api/wifi              the hotspot, the setup's progress, the network, the previous one
+//   GET  /api/wifi/scan         the networks around
+//   POST /api/wifi              form ssid=..&password=.. (or previous=1): join that network
+//   POST /api/wifi/forget       forget the network and restart into the setup hotspot
 #pragma once
 
 void web_start(void);

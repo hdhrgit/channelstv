@@ -13,6 +13,60 @@ bridge on the network by itself, lists what the bridge serves, and plays it with
 ESP32-S3 with 16 MB flash and 8 MB PSRAM, a 240x240 ST7789 touchscreen (CST816 touch), an ES8311
 speaker codec, three keys and a Li-ion battery.
 
+## Installing
+
+Each [release](https://github.com/hdhrgit/channelstv/releases) has two images and their
+checksums:
+
+| File | What it is |
+|------|------------|
+| `channelstv-<version>-full.bin` | bootloader, partition table and app in one, to flash at `0x0` over USB |
+| `channelstv-<version>-ota.bin` | the app alone, for updating a board that already runs channelstv |
+| `SHA256SUMS` | `sha256sum -c SHA256SUMS` checks both |
+
+**First install, over USB:** plug the board in (it shows up as `/dev/ttyACM0` on Linux,
+`/dev/cu.usbmodem*` on macOS, a COM port on Windows) and flash the full image with
+[esptool](https://docs.espressif.com/projects/esptool/) (`pip install esptool`):
+
+```sh
+esptool.py --chip esp32s3 -p /dev/ttyACM0 write_flash 0x0 channelstv-<version>-full.bin
+```
+
+If the port doesn't show up, hold BOOT while pressing RESET to put the board in download mode,
+flash, then press RESET. The full image also covers the settings area, so the board starts
+fresh: with no Wi-Fi network saved, it opens the setup hotspot (below). To keep the settings,
+update over Wi-Fi instead.
+
+**Updating over Wi-Fi:** send the OTA image to a board that already runs channelstv:
+
+```sh
+curl --data-binary @channelstv-<version>-ota.bin -H 'Content-Type: application/octet-stream' http://<board-ip>/api/ota
+```
+
+The board writes it to its spare app slot and restarts. If the new image can't get onto Wi-Fi
+within 90 seconds, the board goes back to the previous one.
+
+## Wi-Fi setup
+
+With no network saved, the board opens its own hotspot, **`channelstv-setup`** (no password),
+and shows a QR code for it:
+
+1. Scan the QR code with a phone camera, or join `channelstv-setup` in the phone's Wi-Fi
+   settings.
+2. The setup page opens by itself. If it doesn't, open any `http://` address in the browser.
+3. Pick the network, enter its password and tap **Join**. The page and the screen say how it's
+   going ("Wrong password for ...?", "... not found").
+4. Once the board is on the network, the page shows its address and the hotspot closes after
+   30 seconds. Join your network again and open that address.
+
+The network is saved. If it can't be reached two minutes after a start (a new router, a new
+password), the hotspot opens again next to it. Meanwhile the board keeps trying the saved
+network every 30 seconds.
+
+To move the board to another network later, open `http://<board-ip>/wifi`. **Forget this
+network** there (or `POST /api/wifi/forget`) clears the network and restarts into the hotspot.
+The setup page then offers **Back to <network>** for the one just forgotten.
+
 ## Using it
 
 - **Screen:** the bridge's folders (Live TV, Favorites, Recent recordings, TV Shows, Movies,
@@ -80,7 +134,13 @@ Without them the bridge sends the DVR's original stream, which the board can't d
 
 ## Building
 
-You need [ESP-IDF](https://docs.espressif.com/projects/esp-idf/en/v5.4.2/esp32s3/get-started/)
+Releases are built by GitHub Actions ([`.github/workflows/build.yml`](.github/workflows/build.yml))
+with ESP-IDF v5.4.2. Every push builds, and a `v*` tag publishes a release. The build is
+reproducible (`CONFIG_APP_REPRODUCIBLE_BUILD`): the image carries no build paths or dates, and
+[`tools/scan-artifacts.sh`](tools/scan-artifacts.sh) fails the build if an image contains
+something that looks like an IP address, a LAN host name or an e-mail address.
+
+To build it yourself, you need [ESP-IDF](https://docs.espressif.com/projects/esp-idf/en/v5.4.2/esp32s3/get-started/)
 5.4. The other components (LVGL, the H.264 decoder and the audio codecs) come from the ESP
 Component Registry on the first build.
 
@@ -93,24 +153,20 @@ idf.py -p /dev/ttyACM0 flash monitor
 ```
 
 **Wi-Fi:** the board uses the network the Wi-Fi driver last saved. If none has been saved, it
-uses the network set in menuconfig. You can also send `W<ssid>\t<password>\n` over the USB
+uses the network set in menuconfig, and without one it opens the setup hotspot (see
+[Wi-Fi setup](#wi-fi-setup)). You can also send `W<ssid>\t<password>\n` over the USB
 console (for example `printf 'Wmy-network\tmy-password\n' > /dev/ttyACM0`). The board saves it
 and connects.
 
-**Updating over Wi-Fi:** once channelstv is running, a new build can go over the network:
-
-```sh
-curl --data-binary @build/channelstv.bin -H 'Content-Type: application/octet-stream' http://<board-ip>/api/ota
-```
-
-The board writes it to its spare app slot and restarts. If the new image can't get onto Wi-Fi
-within 90 seconds, the board goes back to the previous one.
+**Updating over Wi-Fi:** `build/channelstv.bin` is the OTA image; send it as shown under
+[Installing](#installing).
 
 ## Layout
 
 | File | What it does |
 |------|--------------|
 | `main/main.c` | Start-up, Wi-Fi, keys, power management, rollback |
+| `main/setup.c`, `main/setup.html` | The Wi-Fi setup hotspot, its DNS server and page |
 | `main/board.c` | Board bring-up: display, touch, speaker codec, keys, battery |
 | `main/bridge.c` | SSDP discovery, the bridge's description, ContentDirectory Browse (SOAP, DIDL-Lite) |
 | `main/stream.c` | The HTTP stream: read-ahead ring, reconnects, catching up with the live edge |

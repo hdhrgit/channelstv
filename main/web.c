@@ -22,20 +22,19 @@
 #include "bridge.h"
 #include "h264dec.h"
 #include "player.h"
+#include "setup.h"
 #include "stream.h"
 #include "tv.h"
 #include "ui.h"
 
 extern const char index_html[] asm("_binary_index_html_start");
+extern const char setup_html[] asm("_binary_setup_html_start");
 
-// ?key=... percent-decoded into out; false if it isn't there.
-static bool query_str(httpd_req_t *req, const char *key, char *out, size_t len)
+// key=... of a query string or form body, percent-decoded into out; false if it isn't there.
+static bool form_str(const char *q, const char *key, char *out, size_t len)
 {
-    size_t qlen = httpd_req_get_url_query_len(req) + 1;
-    char *q = qlen > 1 ? malloc(qlen) : NULL;
     char *raw = malloc(len * 3 + 1);
-    bool ok = q && raw && httpd_req_get_url_query_str(req, q, qlen) == ESP_OK &&
-              httpd_query_key_value(q, key, raw, len * 3 + 1) == ESP_OK;
+    bool ok = q && raw && httpd_query_key_value(q, key, raw, len * 3 + 1) == ESP_OK;
     if (ok) {
         size_t o = 0;
         for (const char *s = raw; *s && o + 1 < len; s++) {
@@ -49,8 +48,17 @@ static bool query_str(httpd_req_t *req, const char *key, char *out, size_t len)
         }
         out[o] = '\0';
     }
-    free(q);
     free(raw);
+    return ok;
+}
+
+// ?key=... percent-decoded into out; false if it isn't there.
+static bool query_str(httpd_req_t *req, const char *key, char *out, size_t len)
+{
+    size_t qlen = httpd_req_get_url_query_len(req) + 1;
+    char *q = qlen > 1 ? malloc(qlen) : NULL;
+    bool ok = q && httpd_req_get_url_query_str(req, q, qlen) == ESP_OK && form_str(q, key, out, len);
+    free(q);
     return ok;
 }
 
@@ -78,10 +86,22 @@ static esp_err_t send_raw_json(httpd_req_t *req, const char *s)
     return httpd_resp_sendstr(req, s);
 }
 
-static esp_err_t page(httpd_req_t *req)
+static esp_err_t send_page(httpd_req_t *req, const char *html)
 {
     httpd_resp_set_type(req, "text/html; charset=utf-8");
-    return httpd_resp_sendstr(req, index_html);
+    httpd_resp_set_hdr(req, "Cache-Control", "no-store");
+    return httpd_resp_sendstr(req, html);
+}
+
+// The setup page while the hotspot is open, the status page otherwise.
+static esp_err_t page(httpd_req_t *req)
+{
+    return send_page(req, setup_active() ? setup_html : index_html);
+}
+
+static esp_err_t wifi_page(httpd_req_t *req)
+{
+    return send_page(req, setup_html);
 }
 
 // The calibration and the last touch points, raw and mapped.
@@ -329,6 +349,95 @@ static esp_err_t screen(httpd_req_t *req)
     return err;
 }
 
+// ---------------------------------------------------------------- wi-fi setup
+
+static esp_err_t wifi_state(httpd_req_t *req)
+{
+    net_t net;
+    app_net(&net);
+    char text[96], prev[33] = "";
+    setup_status(text, sizeof(text));
+    app_previous_wifi(prev, sizeof(prev), NULL, 0);
+    cJSON *root = cJSON_CreateObject();
+    cJSON_AddBoolToObject(root, "hotspot", setup_active());
+    cJSON_AddStringToObject(root, "status", text);
+    cJSON_AddBoolToObject(root, "failed", setup_failed());
+    cJSON_AddBoolToObject(root, "connected", net.connected);
+    cJSON_AddStringToObject(root, "ssid", net.ssid);
+    cJSON_AddStringToObject(root, "ip", net.ip);
+    cJSON_AddStringToObject(root, "previous", prev);
+    return send_json(req, root);
+}
+
+static esp_err_t wifi_scan(httpd_req_t *req)
+{
+    char *s = setup_scan_json();
+    if (!s) {
+        return httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "the radio is busy, try again");
+    }
+    esp_err_t err = send_raw_json(req, s);
+    free(s);
+    return err;
+}
+
+// Form body ssid=..&password=.., or previous=1 for the network forgotten last.
+static esp_err_t wifi_set(httpd_req_t *req)
+{
+    char body[256] = "";
+    int len = req->content_len < (int)sizeof(body) - 1 ? req->content_len : (int)sizeof(body) - 1, got = 0;
+    while (got < len) {
+        int n = httpd_req_recv(req, body + got, len - got);
+        if (n <= 0) {
+            return httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "body");
+        }
+        got += n;
+    }
+    body[got] = '\0';
+    char ssid[33] = "", pass[65] = "", v[4];
+    if (form_str(body, "previous", v, sizeof(v)) && v[0] == '1') {
+        if (!app_previous_wifi(ssid, sizeof(ssid), pass, sizeof(pass))) {
+            return httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "no previous network");
+        }
+    } else if (!form_str(body, "ssid", ssid, sizeof(ssid)) || !ssid[0]) {
+        return httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "ssid=");
+    } else {
+        form_str(body, "password", pass, sizeof(pass));
+    }
+    httpd_resp_set_type(req, "application/json");
+    httpd_resp_sendstr(req, "{\"ok\":true}"); // before: the hotspot may change channel to follow
+    app_set_wifi(ssid, pass);
+    return ESP_OK;
+}
+
+static void forget_soon(void *arg)
+{
+    vTaskDelay(pdMS_TO_TICKS(500));
+    app_forget_wifi();
+}
+
+static esp_err_t wifi_forget(httpd_req_t *req)
+{
+    send_raw_json(req, "{\"ok\":true,\"restarting\":true}");
+    xTaskCreate(forget_soon, "forget", 3072, NULL, 5, NULL);
+    return ESP_OK;
+}
+
+// While the hotspot is open, any address the board doesn't know (a phone's captive portal
+// check) goes to the setup page.
+static esp_err_t not_found(httpd_req_t *req, httpd_err_code_t code)
+{
+    char ip[16], loc[40];
+    setup_ap_ip(ip, sizeof(ip));
+    if (!ip[0]) {
+        return httpd_resp_send_err(req, HTTPD_404_NOT_FOUND, "not found");
+    }
+    snprintf(loc, sizeof(loc), "http://%s/", ip);
+    httpd_resp_set_status(req, "302 Found");
+    httpd_resp_set_hdr(req, "Location", loc);
+    httpd_resp_set_hdr(req, "Cache-Control", "no-store");
+    return httpd_resp_send(req, NULL, 0);
+}
+
 static void restart_soon(void *arg)
 {
     vTaskDelay(pdMS_TO_TICKS(500));
@@ -377,7 +486,7 @@ void web_start(void)
 {
     httpd_config_t cfg = HTTPD_DEFAULT_CONFIG();
     cfg.stack_size = 8192;
-    cfg.max_uri_handlers = 16;
+    cfg.max_uri_handlers = 20;
     cfg.recv_wait_timeout = 15;
     // a browser keeps several connections open per page: close the idlest instead of refusing
     cfg.lru_purge_enable = true;
@@ -397,8 +506,14 @@ void web_start(void)
         {.uri = "/api/touch", .method = HTTP_GET, .handler = touch},
         {.uri = "/api/screen", .method = HTTP_GET, .handler = screen},
         {.uri = "/api/ota", .method = HTTP_POST, .handler = ota},
+        {.uri = "/wifi", .method = HTTP_GET, .handler = wifi_page},
+        {.uri = "/api/wifi", .method = HTTP_GET, .handler = wifi_state},
+        {.uri = "/api/wifi", .method = HTTP_POST, .handler = wifi_set},
+        {.uri = "/api/wifi/scan", .method = HTTP_GET, .handler = wifi_scan},
+        {.uri = "/api/wifi/forget", .method = HTTP_POST, .handler = wifi_forget},
     };
     for (size_t i = 0; i < sizeof(uris) / sizeof(uris[0]); i++) {
         httpd_register_uri_handler(h, &uris[i]);
     }
+    httpd_register_err_handler(h, HTTPD_404_NOT_FOUND, not_found);
 }
