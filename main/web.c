@@ -1,0 +1,363 @@
+// HTTP API and page, see web.h.
+
+#include "web.h"
+
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include "freertos/FreeRTOS.h"
+#include "freertos/task.h"
+#include "esp_app_desc.h"
+#include "esp_heap_caps.h"
+#include "esp_http_server.h"
+#include "esp_lvgl_port.h"
+#include "esp_ota_ops.h"
+#include "esp_system.h"
+#include "esp_timer.h"
+#include "cJSON.h"
+#include "lvgl.h"
+
+#include "app.h"
+#include "board.h"
+#include "bridge.h"
+#include "h264dec.h"
+#include "player.h"
+#include "stream.h"
+#include "tv.h"
+#include "ui.h"
+
+extern const char index_html[] asm("_binary_index_html_start");
+
+// ?key=... percent-decoded into out; false if it isn't there.
+static bool query_str(httpd_req_t *req, const char *key, char *out, size_t len)
+{
+    size_t qlen = httpd_req_get_url_query_len(req) + 1;
+    char *q = qlen > 1 ? malloc(qlen) : NULL;
+    char *raw = malloc(len * 3 + 1);
+    bool ok = q && raw && httpd_req_get_url_query_str(req, q, qlen) == ESP_OK &&
+              httpd_query_key_value(q, key, raw, len * 3 + 1) == ESP_OK;
+    if (ok) {
+        size_t o = 0;
+        for (const char *s = raw; *s && o + 1 < len; s++) {
+            if (*s == '%' && s[1] && s[2]) {
+                char hex[3] = {s[1], s[2], 0};
+                out[o++] = (char)strtol(hex, NULL, 16);
+                s += 2;
+            } else {
+                out[o++] = *s == '+' ? ' ' : *s;
+            }
+        }
+        out[o] = '\0';
+    }
+    free(q);
+    free(raw);
+    return ok;
+}
+
+static int query_int(httpd_req_t *req, const char *key, int fallback)
+{
+    char v[16];
+    return query_str(req, key, v, sizeof(v)) ? atoi(v) : fallback;
+}
+
+static esp_err_t send_json(httpd_req_t *req, cJSON *root)
+{
+    char *s = cJSON_PrintUnformatted(root);
+    cJSON_Delete(root);
+    httpd_resp_set_type(req, "application/json");
+    httpd_resp_set_hdr(req, "Cache-Control", "no-store");
+    esp_err_t err = httpd_resp_sendstr(req, s ? s : "{}");
+    free(s);
+    return err;
+}
+
+static esp_err_t send_raw_json(httpd_req_t *req, const char *s)
+{
+    httpd_resp_set_type(req, "application/json");
+    httpd_resp_set_hdr(req, "Cache-Control", "no-store");
+    return httpd_resp_sendstr(req, s);
+}
+
+static esp_err_t page(httpd_req_t *req)
+{
+    httpd_resp_set_type(req, "text/html; charset=utf-8");
+    return httpd_resp_sendstr(req, index_html);
+}
+
+static esp_err_t status(httpd_req_t *req)
+{
+    cJSON *root = cJSON_CreateObject();
+    cJSON_AddStringToObject(root, "fw", CHANNELSTV_VERSION);
+    cJSON_AddStringToObject(root, "idf", esp_app_get_description()->idf_ver);
+    cJSON_AddNumberToObject(root, "uptime_s", esp_timer_get_time() / 1000000);
+    cJSON_AddStringToObject(root, "reset_reason", app_reset_reason());
+    const esp_partition_t *run = esp_ota_get_running_partition();
+    cJSON_AddStringToObject(root, "partition", run ? run->label : "");
+    net_t net;
+    app_net(&net);
+    cJSON *wifi = cJSON_AddObjectToObject(root, "wifi");
+    cJSON_AddBoolToObject(wifi, "connected", net.connected);
+    cJSON_AddStringToObject(wifi, "ssid", net.ssid);
+    cJSON_AddStringToObject(wifi, "ip", net.ip);
+    cJSON_AddNumberToObject(wifi, "rssi", net.rssi);
+    battery_t bat;
+    board_battery(&bat);
+    cJSON *b = cJSON_AddObjectToObject(root, "battery");
+    cJSON_AddNumberToObject(b, "mv", bat.mv);
+    cJSON_AddNumberToObject(b, "percent", bat.percent);
+    cJSON_AddBoolToObject(b, "charging", bat.charging);
+    cJSON_AddBoolToObject(b, "usb", bat.usb);
+    cJSON_AddNumberToObject(root, "chip_temp_c", board_chip_temp());
+    cJSON *ram = cJSON_AddObjectToObject(root, "internal_ram");
+    cJSON_AddNumberToObject(ram, "free", heap_caps_get_free_size(MALLOC_CAP_INTERNAL));
+    cJSON_AddNumberToObject(ram, "largest", heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL));
+    cJSON_AddNumberToObject(ram, "lowest", heap_caps_get_minimum_free_size(MALLOC_CAP_INTERNAL));
+    cJSON_AddNumberToObject(root, "volume", app_volume());
+    cJSON_AddStringToObject(root, "sound", player_state());
+    char *buf = malloc(2048);
+    if (buf) {
+        bridge_status_json(buf, 2048);
+        cJSON_AddItemToObject(root, "bridge", cJSON_Parse(buf));
+        tv_status_json(buf, 2048);
+        cJSON_AddItemToObject(root, "tv", cJSON_Parse(buf));
+        free(buf);
+    }
+    return send_json(req, root);
+}
+
+static esp_err_t settings(httpd_req_t *req)
+{
+    char v[64];
+    if (query_str(req, "bridge", v, sizeof(v))) {
+        bridge_set_override(v);
+    }
+    if (query_str(req, "profile", v, sizeof(v))) {
+        bridge_set_profile(v);
+    }
+    int vol = query_int(req, "volume", -1);
+    if (vol >= 0) {
+        app_set_volume(vol);
+    }
+    cJSON *root = cJSON_CreateObject();
+    cJSON_AddStringToObject(root, "bridge", bridge_override());
+    cJSON_AddStringToObject(root, "profile", bridge_profile());
+    cJSON_AddNumberToObject(root, "volume", app_volume());
+    return send_json(req, root);
+}
+
+static esp_err_t rescan(httpd_req_t *req)
+{
+    bridge_rescan();
+    return send_raw_json(req, "{\"ok\":true}");
+}
+
+static esp_err_t browse(httpd_req_t *req)
+{
+    char id[80] = "0";
+    query_str(req, "id", id, sizeof(id));
+    int start = query_int(req, "start", 0), total = 0;
+    cd_entry_t *e = heap_caps_malloc(20 * sizeof(cd_entry_t), MALLOC_CAP_SPIRAM);
+    int n = e ? bridge_browse(id, start < 0 ? 0 : start, 20, e, &total) : -1;
+    if (n < 0) {
+        heap_caps_free(e);
+        return httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "the bridge didn't answer");
+    }
+    cJSON *root = cJSON_CreateObject();
+    cJSON_AddNumberToObject(root, "total", total);
+    cJSON *arr = cJSON_AddArrayToObject(root, "entries");
+    for (int i = 0; i < n; i++) {
+        cJSON *o = cJSON_CreateObject();
+        cJSON_AddStringToObject(o, "id", e[i].id);
+        cJSON_AddStringToObject(o, "title", e[i].title);
+        cJSON_AddBoolToObject(o, "container", e[i].container);
+        if (e[i].container) {
+            cJSON_AddNumberToObject(o, "children", e[i].children);
+        } else {
+            cJSON_AddBoolToObject(o, "live", e[i].live);
+            cJSON_AddStringToObject(o, "url", e[i].url);
+        }
+        cJSON_AddItemToArray(arr, o);
+    }
+    heap_caps_free(e);
+    return send_json(req, root);
+}
+
+static esp_err_t play(httpd_req_t *req)
+{
+    char *url = malloc(256), title[96] = "";
+    if (!url || !query_str(req, "url", url, 256)) {
+        free(url);
+        return httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "url=");
+    }
+    query_str(req, "title", title, sizeof(title));
+    bool ok = ui_play(url, title[0] ? title : url, query_int(req, "live", 0));
+    free(url);
+    return send_raw_json(req, ok ? "{\"ok\":true}" : "{\"ok\":false,\"error\":\"another start is under way\"}");
+}
+
+static esp_err_t stop(httpd_req_t *req)
+{
+    tv_stop();
+    return send_raw_json(req, "{\"ok\":true}");
+}
+
+static esp_err_t tv(httpd_req_t *req)
+{
+    if (query_int(req, "drop", 0)) {
+        stream_test_drop();
+    }
+    char *buf = malloc(2048);
+    if (!buf) {
+        return httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "memory");
+    }
+    tv_status_json(buf, 2048);
+    esp_err_t err = send_raw_json(req, buf);
+    free(buf);
+    return err;
+}
+
+// What the screen shows, as a 24-bit BMP: the current frame while something plays (the draw
+// task hands over a copy of the next one it draws), otherwise the LVGL screen with the top layer
+// ("Tuning", toasts) blended over it.
+static esp_err_t screen(httpd_req_t *req)
+{
+    int row = LCD_W * 3, size = 54 + row * LCD_H;
+    uint8_t *bmp = heap_caps_calloc(1, size, MALLOC_CAP_SPIRAM);
+    if (!bmp) {
+        return httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "memory");
+    }
+    uint8_t *px = bmp + 54; // rows bottom up, BGR
+    int w, h;
+    const uint8_t *yuv = tv_capture(&w, &h, 500);
+    if (yuv) {
+        uint16_t line[LCD_W * 2];
+        int x0 = (LCD_W - w) / 2, y0 = (LCD_H - h) / 2;
+        const uint8_t *pu = yuv + w * h, *pv = pu + (w / 2) * (h / 2);
+        for (int y = 0; y < h; y += 2) {
+            int n = h - y < 2 ? h - y : 2;
+            h264_i420_rows_to_rgb565be(yuv + y * w, pu + y / 2 * (w / 2), pv + y / 2 * (w / 2), w, w, n, line);
+            for (int k = 0; k < n; k++) {
+                uint8_t *o = px + (LCD_H - 1 - (y0 + y + k)) * row + x0 * 3;
+                for (int x = 0; x < w; x++, o += 3) {
+                    uint16_t c = line[k * w + x];
+                    c = c >> 8 | c << 8; // the panel's byte order back to RGB565
+                    o[0] = (c & 0x1f) << 3;
+                    o[1] = (c >> 5 & 0x3f) << 2;
+                    o[2] = (c >> 11) << 3;
+                }
+            }
+        }
+    } else if (tv_playing() && tv_first_picture_ms()) {
+        heap_caps_free(bmp);
+        return httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "no frame"); // playback holds LVGL
+    } else {
+        if (!lvgl_port_lock(1000)) {
+            heap_caps_free(bmp);
+            return httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "busy");
+        }
+        lv_draw_buf_t *base = lv_snapshot_take(lv_screen_active(), LV_COLOR_FORMAT_RGB888);
+        lv_draw_buf_t *top = lv_snapshot_take(lv_layer_top(), LV_COLOR_FORMAT_ARGB8888);
+        lvgl_port_unlock();
+        for (int y = 0; base && y < LCD_H && y < base->header.h; y++) {
+            const uint8_t *b = base->data + y * base->header.stride;
+            const uint8_t *t = top && y < top->header.h ? top->data + y * top->header.stride : NULL;
+            uint8_t *o = px + (LCD_H - 1 - y) * row;
+            for (int x = 0; x < LCD_W && x < base->header.w; x++) {
+                int a = t && x < top->header.w ? t[x * 4 + 3] : 0;
+                for (int c = 0; c < 3; c++) {
+                    o[x * 3 + c] = (b[x * 3 + c] * (255 - a) + (a ? t[x * 4 + c] * a : 0)) / 255;
+                }
+            }
+        }
+        if (base) {
+            lv_draw_buf_destroy(base);
+        }
+        if (top) {
+            lv_draw_buf_destroy(top);
+        }
+    }
+    bmp[0] = 'B';
+    bmp[1] = 'M';
+    uint32_t fields[] = {size, 0, 54, 40, LCD_W, LCD_H};
+    memcpy(bmp + 2, fields, sizeof(fields));
+    bmp[26] = 1;
+    bmp[28] = 24;
+    httpd_resp_set_type(req, "image/bmp");
+    httpd_resp_set_hdr(req, "Cache-Control", "no-store");
+    esp_err_t err = httpd_resp_send(req, (const char *)bmp, size);
+    heap_caps_free(bmp);
+    return err;
+}
+
+static void restart_soon(void *arg)
+{
+    vTaskDelay(pdMS_TO_TICKS(500));
+    esp_restart();
+}
+
+// The body is a raw app image (build/channelstv.bin). It goes to the spare slot and the board
+// reboots into it; main.c rolls back if the new image doesn't reach Wi-Fi in time.
+static esp_err_t ota(httpd_req_t *req)
+{
+    const esp_partition_t *part = esp_ota_get_next_update_partition(NULL);
+    if (!part || req->content_len <= 0 || req->content_len > part->size) {
+        return httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "bad size");
+    }
+    tv_stop(); // frees Wi-Fi bandwidth and CPU for the upload
+    esp_ota_handle_t h;
+    if (esp_ota_begin(part, req->content_len, &h) != ESP_OK) {
+        return httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "begin");
+    }
+    char *buf = malloc(8192);
+    int left = req->content_len;
+    while (buf && left > 0) {
+        int n = httpd_req_recv(req, buf, left < 8192 ? left : 8192);
+        if (n == HTTPD_SOCK_ERR_TIMEOUT) {
+            continue;
+        }
+        if (n <= 0 || esp_ota_write(h, buf, n) != ESP_OK) {
+            break;
+        }
+        left -= n;
+    }
+    free(buf);
+    if (left > 0) {
+        esp_ota_abort(h);
+        return httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "upload broke off");
+    }
+    if (esp_ota_end(h) != ESP_OK || esp_ota_set_boot_partition(part) != ESP_OK) {
+        return httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "image rejected");
+    }
+    httpd_resp_sendstr(req, "ok, rebooting\n");
+    xTaskCreate(restart_soon, "restart", 2048, NULL, 5, NULL);
+    return ESP_OK;
+}
+
+void web_start(void)
+{
+    httpd_config_t cfg = HTTPD_DEFAULT_CONFIG();
+    cfg.stack_size = 8192;
+    cfg.max_uri_handlers = 16;
+    cfg.recv_wait_timeout = 15;
+    // a browser keeps several connections open per page: close the idlest instead of refusing
+    cfg.lru_purge_enable = true;
+    httpd_handle_t h;
+    if (httpd_start(&h, &cfg) != ESP_OK) {
+        return;
+    }
+    const httpd_uri_t uris[] = {
+        {.uri = "/", .method = HTTP_GET, .handler = page},
+        {.uri = "/api/status", .method = HTTP_GET, .handler = status},
+        {.uri = "/api/settings", .method = HTTP_GET, .handler = settings},
+        {.uri = "/api/rescan", .method = HTTP_GET, .handler = rescan},
+        {.uri = "/api/browse", .method = HTTP_GET, .handler = browse},
+        {.uri = "/api/play", .method = HTTP_GET, .handler = play},
+        {.uri = "/api/stop", .method = HTTP_GET, .handler = stop},
+        {.uri = "/api/tv", .method = HTTP_GET, .handler = tv},
+        {.uri = "/api/screen", .method = HTTP_GET, .handler = screen},
+        {.uri = "/api/ota", .method = HTTP_POST, .handler = ota},
+    };
+    for (size_t i = 0; i < sizeof(uris) / sizeof(uris[0]); i++) {
+        httpd_register_uri_handler(h, &uris[i]);
+    }
+}

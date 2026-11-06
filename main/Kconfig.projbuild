@@ -1,0 +1,14 @@
+menu "channelstv"
+
+config CHANNELSTV_WIFI_SSID
+    string "Wi-Fi network"
+    default ""
+    help
+        Used only while the board has no network saved yet. Leave it empty to set one over the
+        USB console instead ('W' ssid TAB password).
+
+config CHANNELSTV_WIFI_PASSWORD
+    string "Wi-Fi password"
+    default ""
+
+endmenu

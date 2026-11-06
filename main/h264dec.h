@@ -1,0 +1,34 @@
+// Software H.264 (baseline) for the video player: one access unit in, one I420 frame out;
+// the draw task converts it to RGB565 strip by strip on the other core.
+#pragma once
+
+#include <stdbool.h>
+#include <stdint.h>
+
+typedef struct h264dec h264dec_t;
+
+// Builds the colour tables (12 KB of internal RAM, for good): at boot, while that RAM is still in
+// one piece, rather than at the first video, where they split what the draw task needs.
+void h264dec_init(void);
+h264dec_t *h264dec_open(void);
+void h264dec_close(h264dec_t *d);
+
+// Decodes one access unit (Annex-B). When it yields a picture, copies the top-left w x h of
+// it (the coded size is rounded up to 16) into out as compact I420 (w*h*3/2 bytes, Y stride
+// w) and returns 1; 0 if no picture came out, -1 on a decoder error. convert_us, if given,
+// gets the time the copy took.
+int h264dec_frame(h264dec_t *d, const uint8_t *data, int len, uint8_t *out, int w, int h, int64_t *convert_us);
+
+// True if the chunk holds a keyframe (IDR slice), where decoding can start afresh.
+bool h264_is_keyframe(const uint8_t *data, int len);
+
+// Picture adjustments applied while converting, in hundredths: saturation and contrast
+// (100 = as encoded, up to 200), brightness added to luma (-50..50).
+void h264_set_picture(int saturation, int contrast, int brightness);
+void h264_picture(int *saturation, int *contrast, int *brightness);
+
+// I420 (stride = coded width) to the panel's big-endian RGB565, BT.601 studio range.
+void h264_i420_to_rgb565be(const uint8_t *yuv, int stride, int coded_h, int w, int h, uint16_t *out);
+// The same for h rows (even) given each plane's start: py at stride, pu and pv at stride / 2.
+void h264_i420_rows_to_rgb565be(const uint8_t *py, const uint8_t *pu, const uint8_t *pv, int stride, int w, int h,
+                                uint16_t *out);

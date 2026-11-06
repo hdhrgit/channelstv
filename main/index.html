@@ -1,0 +1,143 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>channelstv</title>
+<style>
+  :root { --bg:#fff; --fg:#1d2330; --muted:#5d6678; --line:#d9dde5; --card:#f6f7f9; --accent:#2457d6; --bad:#b3261e; --good:#1b7a3b; }
+  @media (prefers-color-scheme: dark) { :root { --bg:#14171d; --fg:#e6e9ef; --muted:#9aa3b5; --line:#2c323d; --card:#1b1f27; --accent:#7aa2ff; --bad:#ff8a80; --good:#6fd28d; } }
+  * { box-sizing: border-box; }
+  body { margin:0; background:var(--bg); color:var(--fg); font:15px/1.45 system-ui, sans-serif; }
+  main { max-width:640px; margin:0 auto; padding:16px; }
+  h1 { font-size:20px; margin:0 0 12px; }
+  h2 { font-size:15px; margin:20px 0 8px; color:var(--muted); font-weight:600; }
+  .card { background:var(--card); border:1px solid var(--line); border-radius:10px; padding:12px 14px; }
+  dl { display:grid; grid-template-columns:max-content 1fr; gap:4px 14px; margin:0; }
+  dt { color:var(--muted); }
+  dd { margin:0; overflow-wrap:anywhere; }
+  label { display:block; margin:10px 0 4px; color:var(--muted); }
+  input, select, button { font:inherit; color:inherit; }
+  input, select { width:100%; padding:8px 10px; border:1px solid var(--line); border-radius:8px; background:var(--bg); }
+  button { padding:8px 14px; border:0; border-radius:8px; background:var(--accent); color:#fff; cursor:pointer; margin-top:10px; }
+  button.plain { background:transparent; color:var(--accent); border:1px solid var(--line); }
+  .row { display:flex; gap:8px; flex-wrap:wrap; }
+  .hint { color:var(--muted); font-size:13px; margin-top:6px; }
+  .bad { color:var(--bad); } .good { color:var(--good); }
+  ul { list-style:none; padding:0; margin:0; }
+  li { padding:6px 0; border-bottom:1px solid var(--line); display:flex; justify-content:space-between; gap:10px; }
+  li:last-child { border-bottom:0; }
+  li a { color:var(--accent); cursor:pointer; text-decoration:none; }
+  img { image-rendering:pixelated; width:240px; height:240px; border-radius:8px; border:1px solid var(--line); }
+</style>
+</head>
+<body>
+<main>
+<h1>channelstv</h1>
+
+<div class="card"><dl id="status"><dt>Status</dt><dd>loading...</dd></dl></div>
+
+<h2>Bridge</h2>
+<div class="card">
+  <label for="bridge">Bridge address</label>
+  <input id="bridge" placeholder="empty: find it on the network" autocomplete="off">
+  <div class="hint">An IP or host name, with :port if it isn't 8200. Leave it empty to find the bridge automatically.</div>
+  <label for="profile">Picture</label>
+  <select id="profile">
+    <option value="esp32">16:9 (240x144)</option>
+    <option value="esp32_4x3">4:3 centre (240x192)</option>
+  </select>
+  <label for="volume">Volume <span id="volv"></span></label>
+  <input id="volume" type="range" min="0" max="100">
+  <div class="row">
+    <button id="save">Save</button>
+    <button class="plain" id="rescan">Search again</button>
+    <button class="plain" id="stop">Stop playback</button>
+  </div>
+</div>
+
+<h2>Browse</h2>
+<div class="card">
+  <div class="row"><button class="plain" id="up">Top</button><span id="where" class="hint"></span></div>
+  <ul id="list"></ul>
+</div>
+
+<h2>Screen</h2>
+<img id="shot" alt="the board's screen">
+<div><button class="plain" id="snap">Refresh</button></div>
+</main>
+<script>
+const $ = id => document.getElementById(id);
+const esc = s => String(s).replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+let loaded = false;
+
+async function refresh() {
+  try {
+    const s = await (await fetch('/api/status')).json();
+    const b = s.bridge || {}, tv = s.tv || {};
+    const rows = [
+      ['Bridge', b.state === 'found' ? `<span class="good">${esc(b.name || 'found')}</span> at ${esc(b.base)} (${esc(b.found_by)})` : `<span class="bad">${esc(b.state)}</span>`],
+      ['Playing', tv.playing ? `${esc(tv.title)} — ${tv.width}x${tv.height}, ${tv.fps} fps, ${tv.dropped} dropped` : (tv.error ? `<span class="bad">${esc(tv.error)}</span>` : 'nothing')],
+      ['Wi-Fi', s.wifi.connected ? `${esc(s.wifi.ssid)}, ${s.wifi.rssi} dBm, ${esc(s.wifi.ip)}` : 'not connected'],
+      ['Battery', s.battery.mv ? `${(s.battery.mv / 1000).toFixed(2)} V, ${s.battery.percent}%${s.battery.charging ? ', charging' : ''}` : '-'],
+      ['Internal RAM', `${Math.round(s.internal_ram.free / 1024)} KB free, lowest ${Math.round(s.internal_ram.lowest / 1024)} KB`],
+      ['Firmware', `v${esc(s.fw)} (${esc(s.partition)}), IDF ${esc(s.idf)}, up ${Math.round(s.uptime_s / 60)} min`],
+    ];
+    $('status').innerHTML = rows.map(([k, v]) => `<dt>${k}</dt><dd>${v}</dd>`).join('');
+    if (!loaded) {
+      loaded = true;
+      $('bridge').value = b.override || '';
+      $('profile').value = b.profile || 'esp32';
+      $('volume').value = s.volume;
+      $('volv').textContent = s.volume + '%';
+    }
+  } catch (e) {
+    $('status').innerHTML = '<dt>Status</dt><dd class="bad">the board doesn\'t answer</dd>';
+  }
+}
+
+$('volume').oninput = () => $('volv').textContent = $('volume').value + '%';
+$('save').onclick = async () => {
+  const q = new URLSearchParams({bridge: $('bridge').value.trim(), profile: $('profile').value, volume: $('volume').value});
+  await fetch('/api/settings?' + q);
+  setTimeout(refresh, 500);
+};
+$('rescan').onclick = () => fetch('/api/rescan').then(() => setTimeout(refresh, 1500));
+$('stop').onclick = () => fetch('/api/stop').then(refresh);
+
+const path = [{id: '0', title: 'Top'}];
+async function browse(start = 0) {
+  const at = path[path.length - 1];
+  $('where').textContent = path.map(p => p.title).join(' / ');
+  $('list').innerHTML = '<li>loading...</li>';
+  try {
+    const r = await fetch(`/api/browse?id=${encodeURIComponent(at.id)}&start=${start}`);
+    if (!r.ok) throw new Error(await r.text());
+    const d = await r.json();
+    const items = d.entries.map((e, i) => `<li><a data-i="${i}">${e.container ? '📁 ' : e.live ? '📺 ' : '🎬 '}${esc(e.title)}</a><span class="hint">${e.container ? e.children : ''}</span></li>`);
+    if (start + d.entries.length < d.total) items.push(`<li><a data-more="${start + d.entries.length}">more (${d.total - start - d.entries.length} left)</a><span></span></li>`);
+    $('list').innerHTML = items.join('') || '<li>nothing here</li>';
+    $('list').onclick = ev => {
+      const a = ev.target.closest('a');
+      if (!a) return;
+      if (a.dataset.more) return browse(+a.dataset.more);
+      const e = d.entries[+a.dataset.i];
+      if (e.container) { path.push({id: e.id, title: e.title}); browse(); }
+      else fetch(`/api/play?${new URLSearchParams({url: e.url, title: e.title, live: e.live ? 1 : 0})}`).then(() => setTimeout(refresh, 1000));
+    };
+  } catch (e) {
+    $('list').innerHTML = `<li class="bad">${esc(e.message || e)}</li>`;
+  }
+}
+$('up').onclick = () => { path.length = 1; browse(); };
+
+const snap = () => $('shot').src = '/api/screen?t=' + Date.now();
+$('snap').onclick = snap;
+
+refresh();
+browse();
+snap();
+setInterval(refresh, 3000);
+</script>
+</body>
+</html>

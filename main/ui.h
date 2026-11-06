@@ -1,0 +1,28 @@
+// The touchscreen: what the bridge serves, a folder at a time (Live TV, recordings, ...), a
+// page at a time; tap a folder to open it, an item to play it, the arrow (or PWR) to go back.
+#pragma once
+
+#include <stdbool.h>
+#include <stdint.h>
+
+void ui_start(void);
+// Any key press: wakes a dimmed screen. Safe from any task.
+void ui_wake(void);
+// Up one folder. Safe from any task.
+void ui_back(void);
+// Flashes the volume over the screen. Safe from any task.
+void ui_show_volume(int volume);
+// Full brightness now, even if idle on battery had dimmed it. Call with the LVGL lock held
+// (playback does, since the dimming timer can't run while it owns the screen).
+void ui_backlight_full(void);
+// The power-off countdown while PWR is held: held_ms of 3000 shows "Powering off",
+// 0 hides it. Safe from any task.
+void ui_power_hold(int held_ms);
+// Plays a stream the way a tap on an item does (/api/play). False if another start is
+// still under way.
+bool ui_play(const char *url, const char *title, bool live);
+// Takes the "Tuning" screen of a start away. Call with the LVGL lock held.
+void ui_tuning_end(void);
+// text in the accent colour on black, w x h, as the panel takes it (RGB565, bytes swapped), in
+// PSRAM for the player to draw itself; NULL without memory. Call with LVGL's lock held.
+uint16_t *ui_banner(const char *text, int w, int h);
