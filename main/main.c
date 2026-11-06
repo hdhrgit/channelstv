@@ -62,6 +62,8 @@ void app_set_volume(int v)
     }
 }
 
+static bool s_ota_on;
+
 static void volume_load(void)
 {
     nvs_handle_t h;
@@ -70,6 +72,27 @@ static void volume_load(void)
         if (nvs_get_i32(h, "volume", &v) == ESP_OK) {
             s_volume = v;
         }
+        if (nvs_get_i32(h, "ota_on", &v) == ESP_OK) {
+            s_ota_on = v != 0;
+        } else if (nvs_get_i32(h, "volume", &v) == ESP_OK) {
+            s_ota_on = true; // settings from an earlier build, which always took updates: keep that
+        }
+        nvs_close(h);
+    }
+}
+
+bool app_ota_enabled(void)
+{
+    return s_ota_on;
+}
+
+void app_set_ota_enabled(bool on)
+{
+    s_ota_on = on;
+    nvs_handle_t h;
+    if (nvs_open("channelstv", NVS_READWRITE, &h) == ESP_OK) {
+        nvs_set_i32(h, "ota_on", on);
+        nvs_commit(h);
         nvs_close(h);
     }
 }

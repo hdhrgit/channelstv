@@ -144,6 +144,7 @@ static int s_cal_raw[5][2];
 static const int s_cal_at[5][2] = {{30, 30}, {210, 30}, {210, 210}, {30, 210}, {120, 120}};
 
 static bool s_dimmed, s_screen_off;
+static bool s_api_touch; // the gesture under way came from /api/touch, not a finger
 static battery_t s_bat;
 static int64_t s_bat_at;
 
@@ -221,12 +222,12 @@ static bool at_settings(void)
     return !strcmp(s_stack[s_depth - 1].id, SETTINGS_ID);
 }
 
-enum { SET_TOUCH, SET_PICTURE, SET_ROTATION, SET_FIND, SET_ABOUT, SET_N };
+enum { SET_TOUCH, SET_PICTURE, SET_ROTATION, SET_OTA, SET_FIND, SET_ABOUT, SET_N };
 
 // Settings, a page at a time like any folder.
 static void settings_rows(void)
 {
-    static const char *const titles[SET_N] = {"Touch test", "Picture", "Rotation", "Find the bridge again", "About"};
+    static const char *const titles[SET_N] = {"Touch test", "Picture", "Rotation", "OTA updates", "Find the bridge again", "About"};
     static const char *const rotations[] = {"auto", "0\u00b0", "90\u00b0", "180\u00b0", "270\u00b0"};
     int first = s_stack[s_depth - 1].page * ROWS;
     s_count = 0;
@@ -236,6 +237,8 @@ static void settings_rows(void)
         snprintf(e->id, sizeof(e->id), "#set%d", k);
         if (k == SET_PICTURE) {
             snprintf(e->title, sizeof(e->title), "Picture: %s", !strcmp(bridge_profile(), "esp32_4x3") ? "4:3 centre" : "16:9");
+        } else if (k == SET_OTA) {
+            snprintf(e->title, sizeof(e->title), "OTA updates: %s", app_ota_enabled() ? "on" : "off");
         } else if (k == SET_ROTATION) {
             snprintf(e->title, sizeof(e->title), "Rotation: %s", rotations[rotate_setting() + 1]);
         } else {
@@ -1078,6 +1081,14 @@ static void activate_row(int i)
             rotate_set(rotate_setting() >= 3 ? ROTATE_AUTO : rotate_setting() + 1);
             settings_rows();
             break;
+        case SET_OTA:
+            if (s_api_touch && !app_ota_enabled()) {
+                toast("Only a finger on the board turns this on", 3000); // not /api/touch
+                break;
+            }
+            app_set_ota_enabled(!app_ota_enabled());
+            settings_rows();
+            break;
         case SET_FIND:
             bridge_rescan();
             toast("Searching...", 1500);
@@ -1612,7 +1623,9 @@ bool ui_touch(const char *gesture, int x, int y)
         if (!lvgl_port_lock(500)) {
             return false;
         }
+        s_api_touch = true;
         on_gesture(names[i].g, x, y);
+        s_api_touch = false;
         lvgl_port_unlock();
         return true;
     }

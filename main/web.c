@@ -140,6 +140,7 @@ static esp_err_t status(httpd_req_t *req)
     cJSON_AddStringToObject(root, "reset_reason", app_reset_reason());
     const esp_partition_t *run = esp_ota_get_running_partition();
     cJSON_AddStringToObject(root, "partition", run ? run->label : "");
+    cJSON_AddBoolToObject(root, "ota_enabled", app_ota_enabled());
     net_t net;
     app_net(&net);
     cJSON *wifi = cJSON_AddObjectToObject(root, "wifi");
@@ -501,6 +502,9 @@ static void restart_soon(void *arg)
 // reboots into it; main.c rolls back if the new image doesn't reach Wi-Fi in time.
 static esp_err_t ota(httpd_req_t *req)
 {
+    if (!app_ota_enabled()) {
+        return httpd_resp_send_err(req, HTTPD_403_FORBIDDEN, "OTA updates are off: enable them on the board, Settings -> OTA updates");
+    }
     const esp_partition_t *part = esp_ota_get_next_update_partition(NULL);
     if (!part || req->content_len <= 0 || req->content_len > part->size) {
         return httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "bad size");

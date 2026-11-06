@@ -24,6 +24,12 @@ void app_forget_wifi(void);
 // The network forgotten last; false if there is none. password may be NULL.
 bool app_previous_wifi(char *ssid, size_t ssid_len, char *password, size_t pass_len);
 
+// Updates over Wi-Fi (POST /api/ota) are taken only while this is on. Saved in NVS. Off on a
+// fresh install; a board updated from a build without the setting keeps taking them. Set on
+// the board only (Settings -> OTA updates): the network can't turn it on.
+bool app_ota_enabled(void);
+void app_set_ota_enabled(bool on);
+
 // Why the board last started: "power-on", "panic", "watchdog", "brownout", "software", ...
 const char *app_reset_reason(void);
 

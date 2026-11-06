@@ -37,7 +37,14 @@ flash, then press RESET. The full image also covers the settings area, so the bo
 fresh: with no Wi-Fi network saved, it opens the setup hotspot (below). To keep the settings,
 update over Wi-Fi instead.
 
-**Updating over Wi-Fi:** send the OTA image to a board that already runs channelstv:
+**Or from the browser:** in Chrome or Edge on a desktop computer, open Espressif's
+[web flasher](https://espressif.github.io/esptool-js/), click **Connect** and pick the board's
+port, enter `0x0` as the flash address, choose `channelstv-<version>-full.bin` and click
+**Program**. Press RESET when it's done.
+
+**Updating over Wi-Fi:** OTA updates are off on a fresh install. Turn them on with a finger on
+the board, Settings → **OTA updates**; the web page and the API can't turn them on, only off
+(`/api/status` says `ota_enabled`). Then send the OTA image:
 
 ```sh
 curl --data-binary @channelstv-<version>-ota.bin -H 'Content-Type: application/octet-stream' http://<board-ip>/api/ota

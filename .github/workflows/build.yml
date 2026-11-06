@@ -60,13 +60,32 @@ jobs:
     permissions:
       contents: write
     steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      # The tag's CHANGELOG.md section (a pre-release such as v0.2.0-rc1 uses v0.2.0's), then
+      # the full diff since the previous v* tag, or since the first commit.
+      - name: Release notes
+        run: |
+          ver="${GITHUB_REF_NAME%%-*}"
+          awk -v h="## $ver" '$0 == h {on = 1; next} /^## / {on = 0} on' CHANGELOG.md > notes.md
+          if [ ! -s notes.md ]; then echo "no CHANGELOG.md section for $ver" >&2; exit 1; fi
+          # the last release (not an rc) before this tag, else the first commit
+          prev=$(git describe --tags --abbrev=0 --match 'v[0-9]*' --exclude '*-*' "$GITHUB_REF_NAME^" 2>/dev/null) ||
+            prev=$(git rev-list --max-parents=0 HEAD | tail -1)
+          printf '\n**Full diff:** https://github.com/%s/compare/%s...%s\n' "$GITHUB_REPOSITORY" "$prev" "$GITHUB_REF_NAME" >> notes.md
+          cat notes.md
+
       - uses: actions/download-artifact@v4
         with:
           name: channelstv-${{ github.ref_name }}
+
       - uses: softprops/action-gh-release@v2
         with:
+          body_path: notes.md
+          prerelease: ${{ contains(github.ref_name, '-') }}
           files: |
             channelstv-*-full.bin
             channelstv-*-ota.bin
             SHA256SUMS
-          generate_release_notes: true

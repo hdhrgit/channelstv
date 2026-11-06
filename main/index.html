@@ -86,6 +86,7 @@ async function refresh() {
     const b = s.bridge || {}, tv = s.tv || {};
     const rows = [
       ['Bridge', b.state === 'found' ? `<span class="good">${esc(b.name || 'found')}</span> at ${esc(b.base)} (${esc(b.found_by)})` : `<span class="bad">${esc(b.state)}</span>`],
+      ...(s.ota_enabled === false ? [['OTA', 'OTA updates are off — enable on the board: Settings → OTA updates']] : []),
       ...(b.profile_problem ? [['Profile', `<span class="bad">The bridge needs the esp32 profile (${esc(b.profile_problem)}): see the <a href="https://github.com/hdhrgit/channelstv#bridge-setup">README</a></span>`]] : []),
       ['Playing', tv.playing ? `${esc(tv.title)} — ${tv.width}x${tv.height}, ${tv.fps} fps, ${tv.dropped} dropped` : (tv.error ? `<span class="bad">${esc(tv.error)}</span>` : 'nothing')],
       ['Wi-Fi', s.wifi.connected ? `${esc(s.wifi.ssid)}, ${s.wifi.rssi} dBm, ${esc(s.wifi.ip)}` : 'not connected'],

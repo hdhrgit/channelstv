@@ -16,7 +16,9 @@
 //   GET  /api/rotation[?set=auto|0..3][&fake=x,y,z|off]  the screen's rotation (quarter turns
 //                               clockwise);
 //                               fake= stands in for the motion sensor (in g), for tests
-//   POST /api/ota               raw app image: flash it to the spare slot and reboot
+//   POST /api/ota               raw app image: flash it to the spare slot and reboot (403 while
+//                               Settings -> OTA updates is off; only a finger on the board turns
+//                               it on, not /api/touch)
 //   GET  /wifi                  the Wi-Fi setup page (also "/" while the setup hotspot is open)
 //   GET  /api/wifi              the hotspot, the setup's progress, the network, the previous one
 //   GET  /api/wifi/scan         the networks around
