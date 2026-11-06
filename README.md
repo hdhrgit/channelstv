@@ -7,9 +7,9 @@ The bridge converts each stream into something the board can decode (H.264 Const
 Baseline, one slice per frame, up to 240x240, with mono AAC-LC audio). The board finds the
 bridge on the network by itself, lists what the bridge serves, and plays it with sound.
 
-![channelstv on the board: Wi-Fi setup, browsing, the number pad, live TV, the playback controls, seeking a recording, Settings](docs/demo.gif)
+![channelstv on the board: Wi-Fi setup, browsing, the number pad, live TV, the playback controls, seeking a recording, Settings, About](docs/demo.gif)
 
-The pictures come from the board's own screen (`/api/screen`); recording titles are blurred.
+The pictures come from the board's own screen (`/api/screen`); recording titles are blurred, and the address shown is an example.
 
 ## Board
 
