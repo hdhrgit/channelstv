@@ -7,6 +7,10 @@ The bridge converts each stream into something the board can decode (H.264 Const
 Baseline, one slice per frame, up to 240x240, with mono AAC-LC audio). The board finds the
 bridge on the network by itself, lists what the bridge serves, and plays it with sound.
 
+![channelstv on the board: Wi-Fi setup, browsing, the number pad, live TV, the playback controls, seeking a recording, Settings](docs/demo.gif)
+
+The pictures come from the board's own screen (`/api/screen`); recording titles are blurred.
+
 ## Board
 
 [Waveshare ESP32-S3-Touch-LCD-1.54](https://docs.waveshare.com/ESP32-S3-Touch-LCD-1.54):
