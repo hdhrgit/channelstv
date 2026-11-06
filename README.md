@@ -9,7 +9,7 @@ bridge on the network by itself, lists what the bridge serves, and plays it with
 
 ## Board
 
-[Waveshare ESP32-S3-Touch-LCD-1.54](https://www.waveshare.com/wiki/ESP32-S3-Touch-LCD-1.54):
+[Waveshare ESP32-S3-Touch-LCD-1.54](https://docs.waveshare.com/ESP32-S3-Touch-LCD-1.54):
 ESP32-S3 with 16 MB flash and 8 MB PSRAM, a 240x240 ST7789 touchscreen (CST816 touch), an ES8311
 speaker codec, three keys and a Li-ion battery.
 
