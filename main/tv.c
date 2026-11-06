@@ -254,6 +254,9 @@ static void draw_task(void *arg)
     uint16_t *banner_dma = NULL; // freed a frame after its last use: by then the panel has it
     int banner_age = 0;
     while ((s_drstate = "waiting", xQueueReceive(s_full_q, &fr, portMAX_DELAY)) && fr.buf != FR_END) {
+        if (board_rotation_apply()) {
+            s_overlay_dirty = true; // the whole screen again, the new way up
+        }
         if (s_banner && !overlay_on && banner_on != s_banner_want && s_pic_h && (LCD_H - s_pic_h) / 2 >= BANNER_H) {
             if (!banner_dma) {
                 banner_dma = heap_caps_malloc(LCD_W * BANNER_H * 2, MALLOC_CAP_DMA | MALLOC_CAP_INTERNAL);

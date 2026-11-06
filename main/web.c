@@ -22,6 +22,7 @@
 #include "bridge.h"
 #include "h264dec.h"
 #include "player.h"
+#include "rotate.h"
 #include "setup.h"
 #include "stream.h"
 #include "tv.h"
@@ -249,6 +250,26 @@ static esp_err_t play(httpd_req_t *req)
     bool ok = ui_play(url, title[0] ? title : url, query_int(req, "live", 0));
     free(url);
     return send_raw_json(req, ok ? "{\"ok\":true}" : "{\"ok\":false,\"error\":\"another start is under way\"}");
+}
+
+// ?set=auto|0..3, ?axes=0..7, ?fake=x,y,z (g) or fake=off; the rotation either way.
+static esp_err_t rotation(httpd_req_t *req)
+{
+    char v[40];
+    if (query_str(req, "set", v, sizeof(v))) {
+        rotate_set(!strcmp(v, "auto") ? ROTATE_AUTO : atoi(v));
+    }
+    if (query_str(req, "axes", v, sizeof(v))) {
+        rotate_set_axes(atoi(v));
+    }
+    if (query_str(req, "fake", v, sizeof(v))) {
+        float x, y, z;
+        bool fake = sscanf(v, "%f,%f,%f", &x, &y, &z) == 3;
+        rotate_fake(fake, fake ? x : 0, fake ? y : 0, fake ? z : 0);
+    }
+    char buf[256];
+    rotate_status_json(buf, sizeof(buf));
+    return send_raw_json(req, buf);
 }
 
 // ?by=±seconds seeks the recording that plays; without it, where it is.
@@ -521,7 +542,7 @@ void web_start(void)
 {
     httpd_config_t cfg = HTTPD_DEFAULT_CONFIG();
     cfg.stack_size = 8192;
-    cfg.max_uri_handlers = 22;
+    cfg.max_uri_handlers = 24;
     cfg.recv_wait_timeout = 15;
     // a browser keeps several connections open per page: close the idlest instead of refusing
     cfg.lru_purge_enable = true;
@@ -538,6 +559,7 @@ void web_start(void)
         {.uri = "/api/play", .method = HTTP_GET, .handler = play},
         {.uri = "/api/stop", .method = HTTP_GET, .handler = stop},
         {.uri = "/api/seek", .method = HTTP_GET, .handler = seek},
+        {.uri = "/api/rotation", .method = HTTP_GET, .handler = rotation},
         {.uri = "/api/tv", .method = HTTP_GET, .handler = tv},
         {.uri = "/api/touch", .method = HTTP_GET, .handler = touch},
         {.uri = "/api/screen", .method = HTTP_GET, .handler = screen},

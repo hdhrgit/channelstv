@@ -62,6 +62,15 @@ void board_battery(battery_t *out);
 float board_chip_temp(void);
 // From the QMI8658 motion sensor, nearer the room than the chip is. -273 if absent.
 float board_imu_temp(void);
+// The QMI8658's acceleration in g on its own axes; false without it.
+bool board_accel(float *x, float *y, float *z);
+// The panel's rotation, 0..3 quarter turns: the picture's top at the panel's top, right,
+// bottom or left edge. Touches are turned with it. board_rotation_want() asks for one;
+// board_rotation_apply() makes it, from whoever draws on the panel at the time (the LVGL task,
+// or playback's draw task); true if it changed, and the whole screen needs drawing again.
+void board_rotation_want(int r);
+int board_rotation(void);
+bool board_rotation_apply(void);
 // The panel's gamma curve: 1.0, 1.8, 2.2 (the power-on default) or 2.5; the nearest is used.
 // Call with the LVGL lock held, so it doesn't land in the middle of a frame.
 bool board_panel_gamma(float gamma);

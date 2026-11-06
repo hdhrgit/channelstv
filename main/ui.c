@@ -26,6 +26,7 @@
 #include "app.h"
 #include "board.h"
 #include "bridge.h"
+#include "rotate.h"
 #include "setup.h"
 #include "tv.h"
 
@@ -220,18 +221,28 @@ static bool at_settings(void)
     return !strcmp(s_stack[s_depth - 1].id, SETTINGS_ID);
 }
 
+enum { SET_TOUCH, SET_PICTURE, SET_ROTATION, SET_FIND, SET_ABOUT, SET_N };
+
+// Settings, a page at a time like any folder.
 static void settings_rows(void)
 {
-    static const char *const titles[] = {"Touch test", "Picture", "Find the bridge again", "About"};
-    for (int i = 0; i < ROWS; i++) {
-        memset(&s_entries[i], 0, sizeof(s_entries[i]));
-        snprintf(s_entries[i].id, sizeof(s_entries[i].id), "#set%d", i);
-        strlcpy(s_entries[i].title, titles[i], sizeof(s_entries[i].title));
+    static const char *const titles[SET_N] = {"Touch test", "Picture", "Rotation", "Find the bridge again", "About"};
+    static const char *const rotations[] = {"auto", "0\u00b0", "90\u00b0", "180\u00b0", "270\u00b0"};
+    int first = s_stack[s_depth - 1].page * ROWS;
+    s_count = 0;
+    for (int k = first; k < SET_N && s_count < ROWS; k++) {
+        cd_entry_t *e = &s_entries[s_count++];
+        memset(e, 0, sizeof(*e));
+        snprintf(e->id, sizeof(e->id), "#set%d", k);
+        if (k == SET_PICTURE) {
+            snprintf(e->title, sizeof(e->title), "Picture: %s", !strcmp(bridge_profile(), "esp32_4x3") ? "4:3 centre" : "16:9");
+        } else if (k == SET_ROTATION) {
+            snprintf(e->title, sizeof(e->title), "Rotation: %s", rotations[rotate_setting() + 1]);
+        } else {
+            strlcpy(e->title, titles[k], sizeof(e->title));
+        }
     }
-    snprintf(s_entries[1].title, sizeof(s_entries[1].title), "Picture: %s",
-             !strcmp(bridge_profile(), "esp32_4x3") ? "4:3 centre" : "16:9");
-    s_count = ROWS;
-    s_total = ROWS;
+    s_total = SET_N;
 }
 
 // The top folder lists the bridge's folders and, after them, Settings.
@@ -1054,20 +1065,24 @@ static void activate_row(int i)
     if (at_settings()) {
         net_t net;
         char text[200], base[96];
-        switch (i) {
-        case 0:
+        switch (s_stack[s_depth - 1].page * ROWS + i) {
+        case SET_TOUCH:
             s_view = VIEW_CAL;
             s_cal_step = 0;
             break;
-        case 1:
+        case SET_PICTURE:
             bridge_set_profile(!strcmp(bridge_profile(), "esp32_4x3") ? "esp32" : "esp32_4x3");
             settings_rows();
             break;
-        case 2:
+        case SET_ROTATION: // auto, 0, 90, 180, 270, auto, ...
+            rotate_set(rotate_setting() >= 3 ? ROTATE_AUTO : rotate_setting() + 1);
+            settings_rows();
+            break;
+        case SET_FIND:
             bridge_rescan();
             toast("Searching...", 1500);
             break;
-        case 3:
+        case SET_ABOUT:
             app_net(&net);
             bridge_base(base, sizeof(base));
             snprintf(text, sizeof(text), "channelstv %s\n%s\nBridge: %s\n%s", CHANNELSTV_VERSION, net.ip,
@@ -1368,6 +1383,11 @@ static void refresh(lv_timer_t *timer)
     if (s_back_wanted) {
         s_back_wanted = false;
         go_back();
+    }
+    rotate_hold(s_view == VIEW_CAL); // the touch test needs the panel's own way up
+    if (board_rotation_apply()) {
+        lv_obj_invalidate(lv_screen_active());
+        lv_obj_invalidate(lv_layer_top());
     }
     net_t net;
     app_net(&net);
