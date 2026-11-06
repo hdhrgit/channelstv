@@ -74,8 +74,9 @@ The network is saved. If it can't be reached two minutes after a start (a new ro
 password), the hotspot opens again next to it. Meanwhile the board keeps trying the saved
 network every 30 seconds.
 
-To move the board to another network later, open `http://<board-ip>/wifi`. **Forget this
-network** there (or `POST /api/wifi/forget`) clears the network and restarts into the hotspot.
+To move the board to another network later, open `http://<board-ip>/wifi` (needs Web control:
+full). **Forget this network** there (or `POST /api/wifi/forget`) clears the network and
+restarts into the hotspot.
 The setup page then offers **Back to <network>** for the one just forgotten.
 
 ## Using it
@@ -113,19 +114,58 @@ The setup page then offers **Back to <network>** for the one just forgotten.
   runs the panel's own way up.
 - **Keys:** PWR stops playback, or goes back a folder. Hold PWR for 3 s to power off on battery.
   VOL+ and VOL- change the volume.
-- **Web control** (Settings): **read-only** by default, which serves only the status page and
-  `/api/status`; **full** allows everything below; **off** runs no web server. Only a finger on
-  the board loosens it, never the network. OTA updates keep their own switch, and the setup
-  hotspot's page works whatever it says.
-- **Web page:** `http://<board-ip>/` shows the status, the bridge it uses, a browser for the same
-  folders and a picture of the screen. It also sets the bridge address, the picture shape and
-  the volume. The API is listed in [`main/web.h`](main/web.h); `/api/touch` acts as a finger
-  would (`?gesture=tap&x=..&y=..`, or `long`, `up`, `down`, `left`, `right`) and lists the last
-  touch points, raw and mapped.
+- **Web page and API:** see [below](#web-page-and-api); read-only until Settings → Web control
+  says otherwise.
 
 Live channels keep about 8 seconds in hand, so the gaps in the bridge's delivery don't stall the
 picture. Anything beyond that is trimmed by playing 4 % faster (one audio frame in 25 left
 out); if the board falls minutes behind, it skips ahead to what the bridge has just received.
+
+## Web page and API
+
+The board serves a web page and an HTTP API on port 80, at `http://<board-ip>/` (for example
+`http://192.0.2.10/`). Settings → **About** shows the board's address on its screen; the
+router's list of devices has it too.
+
+**Web control** (Settings) says how much of it answers:
+
+| Web control | What answers |
+|---|---|
+| **read-only** (the default, also after updating) | the status page and `GET /api/status`; everything else is `403` |
+| **full** | all of the below |
+| **off** | nothing: no web server runs |
+
+Only a finger on the board loosens it; the web page, the API and `/api/touch` can't. OTA updates
+(`POST /api/ota`) keep their own switch, Settings → **OTA updates** (off on a fresh install),
+which works the same way. While the setup hotspot is open, its page and `/api/wifi*` answer
+whatever Web control says.
+
+With Web control **full**, the page shows the status, browses the bridge's folders and plays
+from them, sets the bridge address, the picture shape, the rotation and the volume, and shows a
+picture of the screen. The API (all `GET` unless shown):
+
+| Address | What it does | Read-only |
+|---|---|---|
+| `/` | the page (only the status while read-only) | yes |
+| `/api/status` | Wi-Fi, battery, memory, the bridge, playback, Web control and OTA | yes |
+| `POST /api/ota` | an app image (`channelstv-<version>-ota.bin`) to flash and restart into | its own switch |
+| `/api/settings?bridge=host[:port]&profile=esp32\|esp32_4x3&volume=0..100` | sets any of them; `bridge=` empty goes back to finding it | |
+| `/api/rescan` | looks for the bridge again | |
+| `/api/browse?id=ID&start=N` | a page of a folder (`0` is the top) | |
+| `/api/play?url=U&title=T&live=1`, `/api/stop` | plays a stream, stops | |
+| `/api/seek?by=±seconds` | where a recording is; `by=` seeks it | |
+| `/api/tv` | playback progress and the stream's state | |
+| `/api/touch?gesture=tap\|long\|up\|down\|left\|right&x=&y=` | acts as a finger would; the last touch points | |
+| `/api/screen` | what the screen shows, as a 240x240 BMP | |
+| `/api/rotation?set=auto\|0..3` | the screen's rotation | |
+| `/wifi`, `/api/wifi`, `/api/wifi/scan`, `POST /api/wifi`, `POST /api/wifi/forget` | Wi-Fi setup | while the hotspot is open |
+
+[`main/web.h`](main/web.h) has every parameter.
+
+**Security:** it's plain HTTP with no login and no HTTPS, made for a home network you trust.
+Anyone who can reach the board can use what Web control allows, so keep it read-only (or off)
+unless you are using the page, and turn OTA updates on only to update; only a finger on the
+board loosens either. The setup hotspot has no password while it runs.
 
 ## Finding the bridge
 
@@ -141,8 +181,8 @@ The description URL and the bridge's UDN are saved, so the next start tries ther
 browsing or playing later fails to connect, the board searches again. If nothing answers, the
 screen says so and the board searches again every 30 seconds.
 
-**Setting the address by hand:** enter the bridge's address on the web page, for example
-`192.0.2.10` or `my-dvr:8200` (the port is 8200 if left out). With an address set, the board
+**Setting the address by hand:** enter the bridge's address on the web page (needs Web control:
+full), for example `192.0.2.20` or `my-dvr:8200` (the port is 8200 if left out). With an address set, the board
 uses only that address and doesn't search. If that address doesn't answer, the screen says so.
 Clear the field to go back to finding the bridge automatically.
 
