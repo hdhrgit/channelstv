@@ -12,6 +12,7 @@
 #include "esp_heap_caps.h"
 #include "esp_http_client.h"
 #include "esp_log.h"
+#include "cJSON.h"
 #include "lwip/sockets.h"
 #include "nvs.h"
 
@@ -37,6 +38,11 @@ static char s_override[64];
 static char s_profile[16] = "esp32";
 static volatile unsigned s_gen;
 static volatile bool s_rescan = true;
+// What is wrong with each of the bridge's client profiles the board asks for ("" when it's fine
+// or couldn't be read), from its /api/state
+static const char *const s_profiles[2] = {"esp32", "esp32_4x3"};
+static char s_problem[2][96];
+static volatile bool s_recheck;
 static TaskHandle_t s_task;
 
 // ---------------------------------------------------------------- settings
@@ -256,12 +262,89 @@ static void use(const device_t *dev, const char *by)
     ESP_LOGI(TAG, "bridge \"%s\" at %s (%s)", dev->name, dev->base, by);
 }
 
+// ---------------------------------------------------------------- the bridge's client profiles
+
+// What a client profile must be for the board to decode its streams; "" if it is.
+static void profile_problem(const cJSON *clients, const char *name, char *out, size_t len)
+{
+    const cJSON *c, *found = NULL;
+    cJSON_ArrayForEach(c, clients) {
+        const cJSON *n = cJSON_GetObjectItem(c, "name");
+        if (cJSON_IsString(n) && !strcmp(n->valuestring, name)) {
+            found = c;
+        }
+    }
+    const cJSON *p = cJSON_GetObjectItem(found, "profile");
+    const cJSON *mode = cJSON_GetObjectItem(p, "mode"), *t = cJSON_GetObjectItem(p, "transcode");
+    const cJSON *h264 = cJSON_GetObjectItem(t, "h264_profile"), *w = cJSON_GetObjectItem(t, "max_width");
+    if (!found) {
+        snprintf(out, len, "no %s client", name);
+    } else if (!cJSON_IsString(mode) || strcmp(mode->valuestring, "transcode")) {
+        snprintf(out, len, "%s: mode %s, needs transcode", name, cJSON_IsString(mode) ? mode->valuestring : "unset");
+    } else if (!cJSON_IsString(h264) || strcmp(h264->valuestring, "baseline")) {
+        snprintf(out, len, "%s: H.264 %s, needs baseline", name, cJSON_IsString(h264) ? h264->valuestring : "unset");
+    } else if (!cJSON_IsTrue(cJSON_GetObjectItem(t, "single_slice"))) {
+        snprintf(out, len, "%s: needs single slice", name);
+    } else if (!cJSON_IsNumber(w) || w->valueint <= 0 || w->valueint > 240) {
+        snprintf(out, len, "%s: width must be 240 or less", name);
+    } else if (len) {
+        out[0] = '\0';
+    }
+}
+
+// Reads the client profiles from the bridge's /api/state (the board never writes to it). If
+// the state can't be read or has no config, nothing is held against the profiles.
+static void check_profiles(const char *base, char *buf)
+{
+    char url[128], problem[2][96] = {"", ""};
+    snprintf(url, sizeof(url), "%s/api/state", base);
+    cJSON *root = http_get(url, buf, DESC_MAX, 4000) > 0 ? cJSON_Parse(buf) : NULL;
+    const cJSON *clients = cJSON_GetObjectItem(cJSON_GetObjectItem(root, "config"), "clients");
+    if (cJSON_IsArray(clients)) {
+        for (int i = 0; i < 2; i++) {
+            profile_problem(clients, s_profiles[i], problem[i], sizeof(problem[i]));
+        }
+    } else {
+        ESP_LOGW(TAG, "can't read the bridge's client profiles");
+    }
+    cJSON_Delete(root);
+    xSemaphoreTake(s_lock, portMAX_DELAY);
+    memcpy(s_problem, problem, sizeof(s_problem));
+    xSemaphoreGive(s_lock);
+    for (int i = 0; i < 2; i++) {
+        if (problem[i][0]) {
+            ESP_LOGW(TAG, "bridge profile: %s", problem[i]);
+        }
+    }
+}
+
+bool bridge_profile_problem(char *out, size_t len)
+{
+    xSemaphoreTake(s_lock, portMAX_DELAY);
+    strlcpy(out, s_problem[!strcmp(s_profile, "esp32_4x3")], len);
+    xSemaphoreGive(s_lock);
+    return out[0];
+}
+
+bool bridge_recheck_profiles(void)
+{
+    char base[96], *buf = heap_caps_malloc(DESC_MAX, MALLOC_CAP_SPIRAM);
+    bridge_base(base, sizeof(base));
+    if (buf && base[0]) {
+        check_profiles(base, buf);
+    }
+    heap_caps_free(buf);
+    char p[96];
+    return bridge_profile_problem(p, sizeof(p));
+}
+
 static void lose(bridge_state_t why)
 {
     xSemaphoreTake(s_lock, portMAX_DELAY);
     bool had = s_base[0];
     s_base[0] = s_control[0] = s_name[0] = '\0';
     s_found_by = "";
+    s_problem[0][0] = s_problem[1][0] = '\0';
     s_state = why;
     if (had) {
         s_gen++;
@@ -394,7 +477,19 @@ static void bridge_task(void *arg)
             if (s_state != BRIDGE_FOUND) {
                 s_state = BRIDGE_SEARCHING;
             }
-            wait = find(buf) ? 0 : RETRY_S;
+            if (find(buf)) {
+                wait = 0;
+                s_recheck = true;
+            } else {
+                wait = RETRY_S;
+            }
+        }
+        if (s_recheck && s_state == BRIDGE_FOUND && buf) {
+            s_recheck = false;
+            char base[96];
+            bridge_base(base, sizeof(base));
+            check_profiles(base, buf);
+            s_gen++; // the screen says it, if a profile is wrong
         }
         // woken early by bridge_rescan()
         ulTaskNotifyTake(pdTRUE, pdMS_TO_TICKS(1000));
@@ -617,10 +712,23 @@ int bridge_browse(const char *id, int start, int max, cd_entry_t *out, int *tota
 
 void bridge_status_json(char *out, size_t len)
 {
-    char base[96];
+    char base[96], problem[2][96];
     bridge_base(base, sizeof(base));
+    xSemaphoreTake(s_lock, portMAX_DELAY);
+    memcpy(problem, s_problem, sizeof(problem));
+    xSemaphoreGive(s_lock);
+    for (int i = 0; i < 2; i++) { // the bridge's own words in there: keep the JSON whole
+        for (char *c = problem[i]; *c; c++) {
+            if (*c == '"' || *c == '\\' || (unsigned char)*c < 0x20) {
+                *c = '\'';
+            }
+        }
+    }
     snprintf(out, len,
              "{\"state\":\"%s\",\"base\":\"%s\",\"name\":\"%s\",\"found_by\":\"%s\",\"override\":\"%s\","
-             "\"profile\":\"%s\",\"udn\":\"%s\"}",
-             bridge_state_text(), base, s_name, s_found_by, s_override, s_profile, s_udn);
+             "\"profile\":\"%s\",\"udn\":\"%s\",\"profile_problem\":\"%s\","
+             "\"profiles\":{\"esp32\":\"%s\",\"esp32_4x3\":\"%s\"}}",
+             bridge_state_text(), base, s_name, s_found_by, s_override, s_profile, s_udn,
+             problem[!strcmp(s_profile, "esp32_4x3")], problem[0][0] ? problem[0] : "ok",
+             problem[1][0] ? problem[1] : "ok");
 }

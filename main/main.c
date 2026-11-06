@@ -5,8 +5,8 @@
 // picture to stop. Keys: PWR stops playback or goes back a folder (hold it to power off on
 // battery), VOL+/VOL- change the volume.
 // Web: http://<board-ip>/ shows the status and sets the bridge address (see web.h).
-// Wi-Fi: the network the Wi-Fi driver last saved, else the one from menuconfig; 'W' ssid TAB
-// password over the USB console sets another one.
+// Wi-Fi: the network the Wi-Fi driver last saved, else the one from menuconfig, else the setup
+// hotspot (setup.h); 'W' ssid TAB password over the USB console sets another one.
 // Update over Wi-Fi: POST build/channelstv.bin to /api/ota; a new image that can't get onto
 // Wi-Fi within 90 s is rolled back.
 
@@ -29,6 +29,7 @@
 #include "board.h"
 #include "bridge.h"
 #include "player.h"
+#include "setup.h"
 #include "tv.h"
 #include "ui.h"
 #include "web.h"
@@ -165,13 +166,51 @@ static void on_key(board_key_t key, press_t press)
 
 // ---------------------------------------------------------------- wi-fi
 
+static bool sta_saved(void)
+{
+    wifi_config_t cfg = {0};
+    return esp_wifi_get_config(WIFI_IF_STA, &cfg) == ESP_OK && cfg.sta.ssid[0];
+}
+
+static esp_timer_handle_t s_retry;
+// The network saved when the setup hotspot opened (none on the first start): it goes back in
+// place of a network picked on the setup page that doesn't take, so a wrong password neither
+// stands in for a network that works nor keeps the hotspot shut at the next start.
+static wifi_config_t s_before;
+
+static void open_setup(void)
+{
+    memset(&s_before, 0, sizeof(s_before));
+    esp_wifi_get_config(WIFI_IF_STA, &s_before);
+    setup_start(s_before.sta.ssid[0] ? (const char *)s_before.sta.ssid : NULL);
+}
+
+static void retry(void *arg)
+{
+    esp_wifi_connect();
+}
+
 static void wifi_event(void *arg, esp_event_base_t base, int32_t id, void *data)
 {
     if (base == WIFI_EVENT && id == WIFI_EVENT_STA_START) {
-        esp_wifi_connect();
+        if (sta_saved()) {
+            esp_wifi_connect();
+        }
     } else if (base == WIFI_EVENT && id == WIFI_EVENT_STA_DISCONNECTED) {
         s_connected = false;
         s_ip[0] = '\0';
+        if (setup_active()) {
+            // the hotspot needs the radio for scans: retry by a timer, and give up on a network
+            // picked on the setup page that doesn't take (the page says why)
+            int ms = setup_on_disconnected(((wifi_event_sta_disconnected_t *)data)->reason);
+            if (ms >= 0) {
+                esp_timer_stop(s_retry);
+                esp_timer_start_once(s_retry, ms * 1000LL);
+            } else {
+                esp_wifi_set_config(WIFI_IF_STA, &s_before);
+            }
+            return;
+        }
         vTaskDelay(pdMS_TO_TICKS(1000));
         esp_wifi_connect();
     } else if (base == IP_EVENT && id == IP_EVENT_STA_GOT_IP) {
@@ -181,6 +220,7 @@ static void wifi_event(void *arg, esp_event_base_t base, int32_t id, void *data)
         ESP_LOGI(TAG, "got ip %s", s_ip);
         // reaching the network proves a freshly flashed image is good
         esp_ota_mark_app_valid_cancel_rollback();
+        setup_on_got_ip(s_ip);
     }
 }
 
@@ -192,6 +232,8 @@ static void wifi_start(void)
     esp_netif_set_hostname(netif, "channelstv");
     wifi_init_config_t init_cfg = WIFI_INIT_CONFIG_DEFAULT();
     esp_wifi_init(&init_cfg);
+    const esp_timer_create_args_t rt = {.callback = retry, .name = "wifi retry"};
+    esp_timer_create(&rt, &s_retry);
     esp_event_handler_register(WIFI_EVENT, ESP_EVENT_ANY_ID, wifi_event, NULL);
     esp_event_handler_register(IP_EVENT, IP_EVENT_STA_GOT_IP, wifi_event, NULL);
     esp_wifi_set_mode(WIFI_MODE_STA);
@@ -205,6 +247,10 @@ static void wifi_start(void)
     }
     esp_wifi_start();
     esp_wifi_set_ps(WIFI_PS_MIN_MODEM); // power_task switches it off while something plays
+    if (!cfg.sta.ssid[0]) {
+        ESP_LOGI(TAG, "no network saved: setup hotspot");
+        open_setup();
+    }
 }
 
 void app_net(net_t *out)
@@ -234,9 +280,58 @@ void app_set_wifi(const char *ssid, const char *password)
     wifi_config_t cfg = {0};
     strlcpy((char *)cfg.sta.ssid, ssid, sizeof(cfg.sta.ssid));
     strlcpy((char *)cfg.sta.password, password, sizeof(cfg.sta.password));
+    setup_on_connecting(ssid);
+    esp_timer_stop(s_retry);
     esp_wifi_disconnect();
     esp_wifi_set_config(WIFI_IF_STA, &cfg); // persisted to NVS by the Wi-Fi driver
     esp_wifi_connect();
+}
+
+// The network forgotten last, kept in our NVS namespace so the setup page can go back to it.
+bool app_previous_wifi(char *ssid, size_t ssid_len, char *password, size_t pass_len)
+{
+    nvs_handle_t h;
+    if (nvs_open("channelstv", NVS_READONLY, &h) != ESP_OK) {
+        return false;
+    }
+    char s[33] = "", p[65] = "";
+    size_t sl = sizeof(s), pl = sizeof(p);
+    bool ok = nvs_get_str(h, "prev_ssid", s, &sl) == ESP_OK && s[0];
+    if (ok && nvs_get_str(h, "prev_pass", p, &pl) != ESP_OK) {
+        p[0] = '\0';
+    }
+    nvs_close(h);
+    if (ok) {
+        strlcpy(ssid, s, ssid_len);
+        if (password) {
+            strlcpy(password, p, pass_len);
+        }
+    }
+    return ok;
+}
+
+void app_forget_wifi(void)
+{
+    wifi_config_t cfg = {0};
+    if (esp_wifi_get_config(WIFI_IF_STA, &cfg) == ESP_OK && cfg.sta.ssid[0]) {
+        nvs_handle_t h;
+        if (nvs_open("channelstv", NVS_READWRITE, &h) == ESP_OK) {
+            char s[33], p[65];
+            strlcpy(s, (const char *)cfg.sta.ssid, sizeof(s));
+            strlcpy(p, (const char *)cfg.sta.password, sizeof(p));
+            nvs_set_str(h, "prev_ssid", s);
+            nvs_set_str(h, "prev_pass", p);
+            nvs_commit(h);
+            nvs_close(h);
+        }
+    }
+    ESP_LOGI(TAG, "forgetting the Wi-Fi network");
+    tv_stop();
+    memset(&cfg, 0, sizeof(cfg));
+    esp_wifi_disconnect();
+    esp_wifi_set_config(WIFI_IF_STA, &cfg);
+    vTaskDelay(pdMS_TO_TICKS(500));
+    esp_restart(); // starts as on the first boot: the setup hotspot
 }
 
 // 'W' ssid TAB password, typed or piped into the USB console
@@ -254,6 +349,17 @@ static void console_task(void *arg)
         printf("wifi set to %s\n", line + 1);
     }
     vTaskDelete(NULL);
+}
+
+// A saved network that isn't there two minutes after start (moved house, new router password):
+// the setup hotspot opens next to it, and the board keeps trying the saved one.
+static void setup_fallback(void *arg)
+{
+    wifi_config_t cfg = {0};
+    if (!s_connected && esp_wifi_get_config(WIFI_IF_STA, &cfg) == ESP_OK && cfg.sta.ssid[0]) {
+        ESP_LOGW(TAG, "%s not reachable: setup hotspot", (const char *)cfg.sta.ssid);
+        open_setup();
+    }
 }
 
 // An updated image that never reaches the network reboots, and the bootloader rolls back.
@@ -295,4 +401,7 @@ void app_main(void)
     esp_timer_handle_t t;
     esp_timer_create(&wd, &t);
     esp_timer_start_once(t, 90 * 1000000LL);
+    const esp_timer_create_args_t fb = {.callback = setup_fallback, .name = "setup fallback"};
+    esp_timer_create(&fb, &t);
+    esp_timer_start_once(t, 120 * 1000000LL);
 }

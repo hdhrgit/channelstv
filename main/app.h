@@ -18,6 +18,11 @@ bool app_online(void);
 
 // Sets the Wi-Fi network and connects to it (the Wi-Fi driver keeps it in NVS).
 void app_set_wifi(const char *ssid, const char *password);
+// Forgets the network and restarts into the setup hotspot. The network is kept as the previous
+// one, which the setup page offers to go back to.
+void app_forget_wifi(void);
+// The network forgotten last; false if there is none. password may be NULL.
+bool app_previous_wifi(char *ssid, size_t ssid_len, char *password, size_t pass_len);
 
 // Why the board last started: "power-on", "panic", "watchdog", "brownout", "software", ...
 const char *app_reset_reason(void);

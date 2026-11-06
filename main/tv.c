@@ -63,6 +63,7 @@ static void task_reap(TaskHandle_t *t)
 
 static uint32_t s_audio_gen;
 static char s_title[96];
+#define UNDECODABLE 25 // decode errors before the first picture that end playback
 static char s_error[128];
 static int s_shown, s_dropped;
 static float s_decode_ms, s_draw_ms, s_fps;
@@ -856,7 +857,12 @@ static void tv_video_task(void *arg)
     if (s_stop) {
         goto done;
     }
-    if (s_pic_w <= 0 || s_pic_w > LCD_W || s_pic_h <= 0 || s_pic_h > LCD_H) {
+    if (s_pic_w <= 0 || s_pic_h <= 0) {
+        strcpy(s_error, TV_UNDECODABLE); // no size from its SPS: not a profile the decoder takes
+        s_stop = true;
+        goto done;
+    }
+    if (s_pic_w > LCD_W || s_pic_h > LCD_H) {
         snprintf(s_error, sizeof(s_error), "picture %dx%d doesn't fit the screen", s_pic_w, s_pic_h);
         s_stop = true;
         goto done;
@@ -886,7 +892,7 @@ static void tv_video_task(void *arg)
         s_stop = true;
     }
     RAM_AT(4);
-    int w = s_pic_w, h = s_pic_h, decoded = 0;
+    int w = s_pic_w, h = s_pic_h, decoded = 0, undecodable = 0;
     int64_t dec_us = 0;
     for (; !s_stop && n > AU_HEAD; n = next_au(au, true)) {
         int64_t pts;
@@ -941,6 +947,12 @@ static void tv_video_task(void *arg)
             if (r < 0) {
                 snprintf(s_error, sizeof(s_error), "H.264 decode error (%d bytes)", len);
                 s_dropped++;
+                if (!decoded && ++undecodable >= UNDECODABLE) {
+                    // not one picture: the stream isn't what the decoder takes (the bridge's
+                    // profile); end it rather than leave a black screen
+                    strcpy(s_error, TV_UNDECODABLE);
+                    break;
+                }
             }
             xQueueSend(s_free_q, &fr.buf, 0);
             continue;

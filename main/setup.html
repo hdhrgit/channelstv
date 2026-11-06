@@ -1,0 +1,124 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>channelstv Wi-Fi</title>
+<style>
+  :root { --bg:#fff; --fg:#1d2330; --muted:#5d6678; --line:#d9dde5; --card:#f6f7f9; --accent:#2457d6; --bad:#b3261e; --good:#1b7a3b; }
+  @media (prefers-color-scheme: dark) { :root { --bg:#14171d; --fg:#e6e9ef; --muted:#9aa3b5; --line:#2c323d; --card:#1b1f27; --accent:#7aa2ff; --bad:#ff8a80; --good:#6fd28d; } }
+  * { box-sizing: border-box; }
+  body { margin:0; background:var(--bg); color:var(--fg); font:16px/1.45 system-ui, sans-serif; }
+  main { max-width:480px; margin:0 auto; padding:16px; }
+  h1 { font-size:20px; margin:0 0 12px; }
+  .card { background:var(--card); border:1px solid var(--line); border-radius:10px; padding:12px 14px; margin-bottom:14px; }
+  label { display:block; margin:10px 0 4px; color:var(--muted); }
+  input, button { font:inherit; color:inherit; }
+  input { width:100%; padding:10px; border:1px solid var(--line); border-radius:8px; background:var(--bg); }
+  button { padding:10px 16px; border:0; border-radius:8px; background:var(--accent); color:#fff; cursor:pointer; margin-top:12px; }
+  button.plain { background:transparent; color:var(--accent); border:1px solid var(--line); }
+  ul { list-style:none; padding:0; margin:0; }
+  li { padding:10px 4px; border-bottom:1px solid var(--line); display:flex; justify-content:space-between; gap:10px; cursor:pointer; }
+  li:last-child { border-bottom:0; }
+  li.on { color:var(--accent); font-weight:600; }
+  .hint { color:var(--muted); font-size:14px; }
+  .bad { color:var(--bad); } .good { color:var(--good); }
+  .row { display:flex; gap:8px; flex-wrap:wrap; align-items:center; }
+</style>
+</head>
+<body>
+<main>
+<h1>channelstv Wi-Fi</h1>
+<div class="card" id="state">loading...</div>
+
+<div class="card">
+  <div class="row"><strong>Networks</strong><button class="plain" id="scan">Scan again</button></div>
+  <ul id="nets"><li class="hint">scanning...</li></ul>
+  <label for="ssid">Network</label>
+  <input id="ssid" autocomplete="off" autocapitalize="off" spellcheck="false">
+  <label for="pass">Password</label>
+  <input id="pass" type="password" autocomplete="off">
+  <div class="row">
+    <button id="join">Join</button>
+    <button class="plain" id="prev" hidden></button>
+  </div>
+  <div class="hint">The board saves the network and joins it. Once it is on, this hotspot closes and the
+    board's page is at the address shown above.</div>
+</div>
+
+<div class="card" id="forgetcard" hidden>
+  <button class="plain" id="forget">Forget this network</button>
+  <div class="hint">The board restarts into its setup hotspot, channelstv-setup.</div>
+</div>
+</main>
+<script>
+const $ = id => document.getElementById(id);
+const esc = s => String(s).replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+const bars = r => r > -60 ? '▂▄▆█' : r > -70 ? '▂▄▆' : r > -80 ? '▂▄' : '▂';
+
+async function state() {
+  try {
+    const w = await (await fetch('/api/wifi')).json();
+    let html;
+    if (w.status) {
+      html = `<span class="${w.failed ? 'bad' : w.connected ? 'good' : ''}">${esc(w.status)}</span>`;
+      if (w.connected && w.ip) html += `<div class="hint">Join that network again, then open <a href="http://${esc(w.ip)}/">http://${esc(w.ip)}/</a></div>`;
+    } else if (w.connected) {
+      html = `On <b>${esc(w.ssid)}</b> at ${esc(w.ip)}`;
+    } else {
+      html = w.hotspot ? 'Pick the network the board should join.' : 'Not connected.';
+    }
+    $('state').innerHTML = html;
+    $('prev').hidden = !w.previous || (w.connected && w.ssid === w.previous);
+    $('forgetcard').hidden = w.hotspot || !w.connected;
+    $('prev').textContent = `Back to ${w.previous}`;
+  } catch (e) { $('state').textContent = 'The board is not answering (it may be changing channel)...'; }
+}
+
+async function scan() {
+  $('nets').innerHTML = '<li class="hint">scanning...</li>';
+  try {
+    const r = await fetch('/api/wifi/scan');
+    if (!r.ok) throw new Error(await r.text());
+    const nets = await r.json();
+    $('nets').innerHTML = nets.length ? nets.map(n =>
+      `<li data-ssid="${esc(n.ssid)}"><span>${esc(n.ssid)}${n.secure ? ' 🔒' : ''}</span><span class="hint">${bars(n.rssi)}</span></li>`).join('')
+      : '<li class="hint">no networks found</li>';
+  } catch (e) { $('nets').innerHTML = `<li class="bad">${esc(e.message || 'scan failed')}</li>`; }
+}
+
+$('nets').onclick = e => {
+  const li = e.target.closest('li[data-ssid]');
+  if (!li) return;
+  document.querySelectorAll('#nets li').forEach(x => x.classList.toggle('on', x === li));
+  $('ssid').value = li.dataset.ssid;
+  $('pass').focus();
+};
+
+async function join(body) {
+  $('state').textContent = 'Saving...';
+  try {
+    const r = await fetch('/api/wifi', {method: 'POST', headers: {'Content-Type': 'application/x-www-form-urlencoded'}, body});
+    if (!r.ok) $('state').innerHTML = `<span class="bad">${esc(await r.text())}</span>`;
+  } catch (e) {}
+  setTimeout(state, 1500);
+}
+
+$('join').onclick = () => {
+  if (!$('ssid').value) { $('ssid').focus(); return; }
+  join(new URLSearchParams({ssid: $('ssid').value, password: $('pass').value}).toString());
+};
+$('prev').onclick = () => join('previous=1');
+$('scan').onclick = scan;
+$('forget').onclick = async () => {
+  if (!confirm('Forget the Wi-Fi network? The board restarts into its setup hotspot.')) return;
+  await fetch('/api/wifi/forget', {method: 'POST'});
+  $('state').textContent = 'Restarting into the setup hotspot (channelstv-setup)...';
+};
+
+state();
+scan();
+setInterval(state, 2000);
+</script>
+</body>
+</html>

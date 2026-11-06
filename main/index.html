@@ -36,6 +36,7 @@
 <h1>channelstv</h1>
 
 <div class="card"><dl id="status"><dt>Status</dt><dd>loading...</dd></dl></div>
+<div class="hint"><a href="/wifi">Change the Wi-Fi network</a></div>
 
 <h2>Bridge</h2>
 <div class="card">
@@ -77,6 +78,7 @@ async function refresh() {
     const b = s.bridge || {}, tv = s.tv || {};
     const rows = [
       ['Bridge', b.state === 'found' ? `<span class="good">${esc(b.name || 'found')}</span> at ${esc(b.base)} (${esc(b.found_by)})` : `<span class="bad">${esc(b.state)}</span>`],
+      ...(b.profile_problem ? [['Profile', `<span class="bad">The bridge needs the esp32 profile (${esc(b.profile_problem)}): see the <a href="https://github.com/hdhrgit/channelstv#bridge-setup">README</a></span>`]] : []),
       ['Playing', tv.playing ? `${esc(tv.title)} — ${tv.width}x${tv.height}, ${tv.fps} fps, ${tv.dropped} dropped` : (tv.error ? `<span class="bad">${esc(tv.error)}</span>` : 'nothing')],
       ['Wi-Fi', s.wifi.connected ? `${esc(s.wifi.ssid)}, ${s.wifi.rssi} dBm, ${esc(s.wifi.ip)}` : 'not connected'],
       ['Battery', s.battery.mv ? `${(s.battery.mv / 1000).toFixed(2)} V, ${s.battery.percent}%${s.battery.charging ? ', charging' : ''}` : '-'],

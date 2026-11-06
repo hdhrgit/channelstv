@@ -26,6 +26,7 @@
 #include "app.h"
 #include "board.h"
 #include "bridge.h"
+#include "setup.h"
 #include "tv.h"
 
 #define C_BG     0x0f1216
@@ -52,6 +53,7 @@
 #define SWIPE_MS 600
 #define TAP_PX   20
 #define OVERLAY_MS 4000                     // the playback controls hide after this
+#define QR_PX    116                        // the setup hotspot's QR code, quiet zone not included
 #define SETTINGS_ID "#settings"
 #define NVS_NS   "channelstv"
 
@@ -92,6 +94,7 @@ static lv_obj_t *s_row[ROWS], *s_row_icon[ROWS], *s_row_text[ROWS];
 static lv_obj_t *s_note;       // a message in place of the rows
 static lv_obj_t *s_pad;        // the number pad's grid
 static lv_obj_t *s_cal;        // the touch test's target
+static lv_obj_t *s_qr;         // the setup hotspot's QR code
 static lv_obj_t *s_catch;      // over everything: takes every touch
 static lv_obj_t *s_toast;
 static int64_t s_toast_until;
@@ -120,6 +123,7 @@ static volatile int s_total;        // entries in the folder, the settings row i
 static volatile unsigned s_result_gen, s_shown_gen;
 static volatile unsigned s_req_gen; // bumped by each request: older answers are dropped
 static unsigned s_bridge_gen = ~0u;
+static unsigned s_setup_gen = ~0u;
 static bridge_state_t s_bridge_state = (bridge_state_t)-1;
 
 // the touch now under way
@@ -197,6 +201,8 @@ static void show(lv_obj_t *o, bool on)
 
 static void toast(const char *text, int ms)
 {
+    // a wrapped label sized to its content comes out a line short: long ones get the full width
+    lv_obj_set_width(s_toast, strlen(text) > 20 ? LCD_W - 16 : LV_SIZE_CONTENT);
     lv_label_set_text(s_toast, text);
     lv_obj_remove_flag(s_toast, LV_OBJ_FLAG_HIDDEN);
     s_toast_until = esp_timer_get_time() + ms * 1000LL;
@@ -513,9 +519,13 @@ static void play_task(void *arg)
         lvgl_port_unlock();
     }
     if (!started || (!tv_playing() && !tv_first_picture_ms() && strcmp(tv_end_reason(), "stopped"))) {
-        char text[160];
+        char text[200], why[96];
         snprintf(text, sizeof(text), "%s\n%s", tv_busy() ? "The bridge is busy" : "Can't play this",
                  tv_busy() ? "it runs all the conversions it allows" : tv_error());
+        bool undecodable = !strcmp(tv_error(), TV_UNDECODABLE) || strstr(tv_error(), "doesn't fit");
+        if (undecodable && bridge_recheck_profiles() && bridge_profile_problem(why, sizeof(why))) {
+            snprintf(text, sizeof(text), "%s\n(%s)", BRIDGE_PROFILE_HELP, why);
+        }
         if (lvgl_port_lock(500)) {
             toast(text, 4000);
             lvgl_port_unlock();
@@ -528,9 +538,30 @@ static void play_task(void *arg)
     vTaskDelete(NULL);
 }
 
+// Says so (and plays nothing) when the bridge's client profile can't give a stream the board
+// decodes. Call with the LVGL lock held.
+static bool profile_toast(void)
+{
+    char why[96], text[200];
+    if (!bridge_profile_problem(why, sizeof(why))) {
+        return false;
+    }
+    snprintf(text, sizeof(text), "%s\n(%s)", BRIDGE_PROFILE_HELP, why);
+    toast(text, 6000);
+    return true;
+}
+
 static bool start_play(const char *url, const char *title, bool live)
 {
     if (s_play_busy) {
+        return false;
+    }
+    char why[96];
+    if (bridge_profile_problem(why, sizeof(why))) {
+        if (lvgl_port_lock(100)) { // recursive: fine from a tap, which holds it already
+            profile_toast();
+            lvgl_port_unlock();
+        }
         return false;
     }
     s_play_busy = true;
@@ -814,6 +845,9 @@ static void activate_row(int i)
 static void on_gesture(gesture_t g, int x, int y)
 {
     lv_display_trigger_activity(NULL);
+    if (setup_active()) {
+        return; // nothing to browse until the board is on a network
+    }
     if (s_view == VIEW_CAL) {
         if (g == G_RIGHT) {
             go_back();
@@ -976,9 +1010,31 @@ static void rows_hidden(void)
     }
 }
 
+// The setup hotspot: its QR code (a phone camera offers to join), what to do, how it's going.
+static void setup_view(void)
+{
+    rows_hidden();
+    show(s_pad, false);
+    show(s_cal, false);
+    show(s_head_back, false);
+    show(s_qr, true);
+    lbl(s_pageno, "");
+    lbl(s_head, "Wi-Fi setup");
+    char status[96], text[160];
+    setup_status(status, sizeof(status));
+    snprintf(text, sizeof(text), "Join %s\n%s", SETUP_SSID, status[0] ? status : "then open any web page");
+    note(text, setup_failed() ? C_WARN : C_TEXT);
+    lv_obj_align(s_note, LV_ALIGN_TOP_MID, 0, HEAD_H + QR_PX + 18);
+}
+
 static void rebuild(void)
 {
     level_t *lv = &s_stack[s_depth - 1];
+    if (setup_active()) {
+        setup_view();
+        return;
+    }
+    show(s_qr, false);
     show(s_note, false);
     show(s_pad, s_view == VIEW_PAD);
     show(s_cal, s_view == VIEW_CAL);
@@ -1080,7 +1136,12 @@ static void refresh(lv_timer_t *timer)
         s_stack[0].page = 0;
         if (bridge_state() == BRIDGE_FOUND) {
             request_page();
+            profile_toast();
         }
+    }
+    if (s_setup_gen != setup_gen()) {
+        s_setup_gen = setup_gen();
+        s_shown_gen = ~s_result_gen;
     }
     if (s_bridge_state != bridge_state()) {
         s_bridge_state = bridge_state();
@@ -1185,6 +1246,17 @@ static void build_screen(lv_obj_t *scr)
     lv_obj_set_style_border_width(s_cal, 3, 0);
     lv_obj_remove_flag(s_cal, LV_OBJ_FLAG_CLICKABLE);
     lv_obj_add_flag(s_cal, LV_OBJ_FLAG_HIDDEN);
+
+    // the setup hotspot's QR code, dark on a white quiet zone
+    s_qr = lv_qrcode_create(scr);
+    lv_qrcode_set_size(s_qr, QR_PX);
+    lv_qrcode_set_dark_color(s_qr, lv_color_hex(0x000000));
+    lv_qrcode_set_light_color(s_qr, lv_color_hex(0xffffff));
+    lv_qrcode_update(s_qr, SETUP_QR, strlen(SETUP_QR));
+    lv_obj_set_style_border_color(s_qr, lv_color_hex(0xffffff), 0);
+    lv_obj_set_style_border_width(s_qr, 6, 0);
+    lv_obj_align(s_qr, LV_ALIGN_TOP_MID, 0, HEAD_H + 4);
+    lv_obj_add_flag(s_qr, LV_OBJ_FLAG_HIDDEN);
 
     // over everything on the screen: every touch comes here
     s_catch = lv_obj_create(scr);
@@ -1329,6 +1401,7 @@ void ui_wake(void)
 void ui_show_volume(int volume)
 {
     if (lvgl_port_lock(100)) {
+        lv_obj_set_width(s_toast, LV_SIZE_CONTENT);
         lv_label_set_text_fmt(s_toast, "%s  %d%%", volume ? LV_SYMBOL_VOLUME_MAX : LV_SYMBOL_MUTE, volume);
         lv_obj_remove_flag(s_toast, LV_OBJ_FLAG_HIDDEN);
         s_toast_until = esp_timer_get_time() + 1500000;
