@@ -58,6 +58,9 @@ static int pipe_read(uint8_t *buf, int len, uint32_t gen)
     while (gen == s_gen) {
         size_t n = xStreamBufferReceive(s_pipe, buf, len, pdMS_TO_TICKS(200));
         if (n > 0) {
+            if (s_playing && s_state[0] == 'b') {
+                set_state("playing %s", s_what); // after "buffering"
+            }
             return n;
         }
         if (s_eof) {
