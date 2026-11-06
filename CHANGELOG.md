@@ -2,8 +2,9 @@
 
 ## Unreleased
 
-- Web page: search the titles of movies, recent recordings and shows; a result plays on the
-  board (a recording with its seek keys and position) or opens the show's episodes.
+- Web page: search the titles of recordings, movies and shows, with the bridge's UPnP Search
+  where it has one (every episode too), else the page's own; a result plays on the board (a
+  recording with its seek keys and position) or opens the show's episodes.
 
 ## v0.2.1 (2026-11-06)
 

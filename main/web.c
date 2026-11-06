@@ -203,17 +203,9 @@ static esp_err_t rescan(httpd_req_t *req)
     return send_raw_json(req, "{\"ok\":true}");
 }
 
-static esp_err_t browse(httpd_req_t *req)
+// A page of a folder or a search, as JSON: {"total":N,"entries":[...]}
+static esp_err_t send_entries(httpd_req_t *req, const cd_entry_t *e, int n, int total)
 {
-    char id[80] = "0";
-    query_str(req, "id", id, sizeof(id));
-    int start = query_int(req, "start", 0), total = 0;
-    cd_entry_t *e = heap_caps_malloc(20 * sizeof(cd_entry_t), MALLOC_CAP_SPIRAM);
-    int n = e ? bridge_browse(id, start < 0 ? 0 : start, 20, e, &total) : -1;
-    if (n < 0) {
-        heap_caps_free(e);
-        return httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "the bridge didn't answer");
-    }
     cJSON *root = cJSON_CreateObject();
     cJSON_AddNumberToObject(root, "total", total);
     cJSON *arr = cJSON_AddArrayToObject(root, "entries");
@@ -232,8 +224,37 @@ static esp_err_t browse(httpd_req_t *req)
         }
         cJSON_AddItemToArray(arr, o);
     }
-    heap_caps_free(e);
     return send_json(req, root);
+}
+
+static esp_err_t browse(httpd_req_t *req)
+{
+    char id[80] = "0";
+    query_str(req, "id", id, sizeof(id));
+    int start = query_int(req, "start", 0), total = 0;
+    cd_entry_t *e = heap_caps_malloc(20 * sizeof(cd_entry_t), MALLOC_CAP_SPIRAM);
+    int n = e ? bridge_browse(id, start < 0 ? 0 : start, 20, e, &total) : -1;
+    esp_err_t err = n < 0 ? httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "the bridge didn't answer")
+                          : send_entries(req, e, n, total);
+    heap_caps_free(e);
+    return err;
+}
+
+// ?q=words[&start=N]: recordings, movies and shows whose titles hold every word, 20 at a time
+// (the bridge's UPnP Search); {"no_search":true} if the bridge has none, for the page to search
+// by itself.
+static esp_err_t search(httpd_req_t *req)
+{
+    char q[128] = "";
+    query_str(req, "q", q, sizeof(q));
+    int start = query_int(req, "start", 0), total = 0;
+    cd_entry_t *e = heap_caps_malloc(20 * sizeof(cd_entry_t), MALLOC_CAP_SPIRAM);
+    int n = e ? bridge_search(q, start < 0 ? 0 : start, 20, e, &total) : -1;
+    esp_err_t err = n == -2  ? send_raw_json(req, "{\"no_search\":true,\"total\":0,\"entries\":[]}")
+                    : n < 0 ? httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "the bridge didn't answer")
+                            : send_entries(req, e, n, total);
+    heap_caps_free(e);
+    return err;
 }
 
 static esp_err_t play(httpd_req_t *req)
@@ -582,7 +603,7 @@ void web_apply(void)
     }
     httpd_config_t cfg = HTTPD_DEFAULT_CONFIG();
     cfg.stack_size = 8192;
-    cfg.max_uri_handlers = 24;
+    cfg.max_uri_handlers = 26;
     cfg.recv_wait_timeout = 15;
     // a browser keeps several connections open per page: close the idlest instead of refusing
     cfg.lru_purge_enable = true;
@@ -606,6 +627,7 @@ void web_apply(void)
         {"/api/settings", HTTP_GET, {settings, FULL}},
         {"/api/rescan", HTTP_GET, {rescan, FULL}},
         {"/api/browse", HTTP_GET, {browse, FULL}},
+        {"/api/search", HTTP_GET, {search, FULL}},
         {"/api/play", HTTP_GET, {play, FULL}},
         {"/api/stop", HTTP_GET, {stop, FULL}},
         {"/api/seek", HTTP_GET, {seek, FULL}},

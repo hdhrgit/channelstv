@@ -163,12 +163,13 @@ async function browse(start = 0) {
 }
 $('up').onclick = () => { path.length = 1; browse(); };
 
-// Search: the bridge has no search of its own (no UPnP Search), so the page reads Movies,
-// Recent recordings and the shows in TV Shows (a page of 20 at a time), keeps them for a few
-// minutes and matches titles as you type: every word, ignoring case and accents.
+// Search: the bridge's own (UPnP Search, /api/search) when it has one: everything it serves,
+// episodes too. A bridge without it says no_search, and the page then reads Movies, Recent recordings
+// and the shows in TV Shows itself (a page of 20 at a time), keeps them for a few minutes and
+// matches titles as you type: every word, ignoring case and accents.
 const SCOPE = [{id: 'movies', name: 'Movies'}, {id: 'recent', name: 'Recent recordings'}, {id: 'rec', name: 'TV Shows'}];
-const KEEP_MS = 5 * 60 * 1000;
-let index = null, indexAt = 0, indexing = null;
+const KEEP_MS = 5 * 60 * 1000, SHOW = 50;
+let bridgeSearch = true, index = null, indexAt = 0, indexing = null, asked = 0;
 const fold = t => t.normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase();
 async function readFolder(f, note) {
   const all = [];
@@ -189,26 +190,51 @@ async function readAll() {
   for (const f of SCOPE) all.push(...await readFolder(f, t => $('qhint').textContent = t));
   return all;
 }
-async function search() {
-  const q = fold($('q').value.trim());
-  if (!q) { $('found').innerHTML = ''; $('qhint').textContent = ''; return; }
+// The bridge's search, up to SHOW results; null if it has none.
+async function askBridge(q) {
+  const hits = [];
+  let total = 0;
+  for (let start = 0; start < SHOW; start = hits.length) {
+    const r = await fetch(`/api/search?q=${encodeURIComponent(q)}&start=${start}`);
+    if (!r.ok) throw new Error(await r.text());
+    const d = await r.json();
+    if (d.no_search) return null;
+    total = d.total;
+    hits.push(...d.entries.map(e => ({...e, where: e.container ? 'show' : e.live ? 'live' : ''})));
+    if (!d.entries.length || hits.length >= total) break;
+  }
+  return {hits, total};
+}
+async function searchHere(q) {
   if (!index || Date.now() - indexAt > KEEP_MS) {
     try {
       index = await (indexing = indexing || readAll());
       indexAt = Date.now();
-    } catch (e) {
-      $('qhint').innerHTML = `<span class="bad">${esc(e.message || e)}</span>`;
-      return;
     } finally {
       indexing = null;
     }
   }
-  const words = q.split(/\s+/);
+  const words = fold(q).split(/\s+/);
   const hits = index.filter(e => words.every(w => e.key.includes(w)));
-  $('qhint').textContent = `${hits.length} found in ${SCOPE.map(f => f.name).join(', ')}`;
-  $('found').innerHTML = hits.slice(0, 50).map((e, i) =>
-    `<li><a data-i="${i}">${e.container ? '📁 ' : '🎬 '}${esc(e.title)}</a><span class="hint">${esc(e.where)}</span></li>`).join('') +
-    (hits.length > 50 ? `<li class="hint">and ${hits.length - 50} more: type more of the title</li>` : '');
+  return {hits, total: hits.length, scope: ` in ${SCOPE.map(f => f.name).join(', ')}`};
+}
+async function search() {
+  const q = $('q').value.trim(), me = ++asked;
+  if (!q) { $('found').innerHTML = ''; $('qhint').textContent = ''; return; }
+  let found;
+  try {
+    found = bridgeSearch ? await askBridge(q) : null;
+    if (!found) { bridgeSearch = false; found = await searchHere(q); }
+  } catch (e) {
+    if (me === asked) $('qhint').innerHTML = `<span class="bad">${esc(e.message || e)}</span>`;
+    return;
+  }
+  if (me !== asked) return; // typed on meanwhile
+  const hits = found.hits;
+  $('qhint').textContent = `${found.total} found${found.scope || ' in recordings, movies and shows'}`;
+  $('found').innerHTML = hits.slice(0, SHOW).map((e, i) =>
+    `<li><a data-i="${i}">${e.container ? '📁 ' : e.live ? '📺 ' : '🎬 '}${esc(e.title)}</a><span class="hint">${esc(e.where)}</span></li>`).join('') +
+    (found.total > SHOW ? `<li class="hint">and ${found.total - SHOW} more: type more of the title</li>` : '');
   $('found').onclick = ev => {
     const a = ev.target.closest('a');
     if (!a) return;
