@@ -182,8 +182,8 @@ browsing or playing later fails to connect, the board searches again. If nothing
 screen says so and the board searches again every 30 seconds.
 
 **Setting the address by hand:** enter the bridge's address on the web page (needs Web control:
-full), for example `192.0.2.20` or `my-dvr:8200` (the port is 8200 if left out). With an address set, the board
-uses only that address and doesn't search. If that address doesn't answer, the screen says so.
+full), for example `192.0.2.20` or `my-dvr:8200` (the port is 8200 if left out). With an
+address set, the board uses only that address and doesn't search. If that address doesn't answer, the screen says so.
 Clear the field to go back to finding the bridge automatically.
 
 ## Bridge setup
