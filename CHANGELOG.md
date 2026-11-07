@@ -1,13 +1,17 @@
 # Changelog
 
-## Unreleased
+## v0.3.0 (2026-11-07)
 
-- Resume shared with the DVR's other players: a recording starts where the bridge says it was
-  left (`upnp:lastPlaybackPosition`, H:MM:SS(.mmm) or seconds), else where the board left it.
-- Recordings not watched yet (`upnp:playbackCount` 0) carry a dot, on the screen and the page.
 - Web page: search the titles of recordings, movies and shows, with the bridge's UPnP Search
   where it has one (every episode too), else the page's own; a result plays on the board (a
   recording with its seek keys and position) or opens the show's episodes.
+- Resume shared with the DVR's other players: a recording starts where the bridge says it was
+  left (`upnp:lastPlaybackPosition`, H:MM:SS(.mmm) or seconds), else where the board left it.
+- Recordings not watched yet (`upnp:playbackCount` 0) carry a dot, on the screen and the page.
+- README: the web page and the API, with what answers while Web control is read-only.
+- Builds leave out LVGL's bundled examples and demos.
+- Needs: search, the shared resume and the dots need a bridge that offers them; older bridges
+  still work (the page then searches Movies, Recent recordings and TV Shows itself).
 
 ## v0.2.1 (2026-11-06)
 
