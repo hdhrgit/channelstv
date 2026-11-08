@@ -468,8 +468,27 @@ void board_keys_start(key_fn fn)
 // Battery voltage (under the board's own ~WiFi load) to charge, in 10 % steps from 0 to
 // 100 %. Measured 2026-10-31: it cut out at 2.90 V; a full charge from empty took 41 min
 // and, off the charger, settled at ~4.02 V. 0 % sits above the cut-off for a few minutes'
-// warning. While charging the voltage reads high, so the figure runs ahead then.
+// warning.
 static const int s_curve_mv[11] = {3050, 3500, 3640, 3700, 3740, 3780, 3820, 3860, 3900, 3950, 4000};
+static const int s_curve_pct[11] = {0, 10, 20, 30, 40, 50, 60, 70, 80, 90, 100};
+// On the charger the voltage reads high: the same battery's voltage while charging, against
+// how much of that 41-minute charge had passed (4.00 V is about half full there).
+static const int s_charge_mv[11] = {3300, 3680, 3820, 3910, 3955, 4000, 4030, 4055, 4095, 4155, 4180};
+static const int s_charge_pct[11] = {0, 8, 19, 29, 39, 50, 60, 69, 79, 91, 99};
+static int s_charging_pct = -1; // the level shown while charging, which only goes up
+
+static int battery_pct(int mv, const int *mvs, const int *pcts)
+{
+    if (mv <= mvs[0]) {
+        return pcts[0];
+    }
+    for (int i = 0; i < 10; i++) {
+        if (mv < mvs[i + 1]) {
+            return pcts[i] + (pcts[i + 1] - pcts[i]) * (mv - mvs[i]) / (mvs[i + 1] - mvs[i]);
+        }
+    }
+    return pcts[10];
+}
 
 void board_battery(battery_t *out)
 {
@@ -494,17 +513,13 @@ void board_battery(battery_t *out)
         return;
     }
     out->mv = sum / n * 3;
-    if (out->mv <= s_curve_mv[0]) {
-        out->percent = 0;
-    } else if (out->mv >= s_curve_mv[10]) {
-        out->percent = 100;
+    if (out->charging) {
+        int pct = battery_pct(out->mv, s_charge_mv, s_charge_pct);
+        s_charging_pct = pct > s_charging_pct ? pct : s_charging_pct;
+        out->percent = s_charging_pct;
     } else {
-        for (int i = 0; i < 10; i++) {
-            if (out->mv < s_curve_mv[i + 1]) {
-                out->percent = i * 10 + 10 * (out->mv - s_curve_mv[i]) / (s_curve_mv[i + 1] - s_curve_mv[i]);
-                break;
-            }
-        }
+        s_charging_pct = -1;
+        out->percent = battery_pct(out->mv, s_curve_mv, s_curve_pct);
     }
 }
 

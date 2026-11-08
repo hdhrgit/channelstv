@@ -1472,7 +1472,7 @@ static void battery_line(void)
     if (shown) {
         char text[24];
         if (s_bat.charging) {
-            snprintf(text, sizeof(text), LV_SYMBOL_CHARGE "%s", battery_symbol(s_bat.percent));
+            snprintf(text, sizeof(text), LV_SYMBOL_CHARGE "%d%%%s", s_bat.percent, battery_symbol(s_bat.percent));
         } else {
             snprintf(text, sizeof(text), "%d%%%s", s_bat.percent, battery_symbol(s_bat.percent));
         }

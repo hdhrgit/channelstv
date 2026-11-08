@@ -22,7 +22,7 @@ typedef void (*key_fn)(board_key_t key, press_t press);
 
 typedef struct {
     int mv;          // battery voltage, 0 if unknown
-    int percent;
+    int percent;     // estimated; while charging only rising, and at most 99
     bool charging;   // the charger's status line says so
     bool usb;        // a USB host is talking to us, or we are charging
 } battery_t;
