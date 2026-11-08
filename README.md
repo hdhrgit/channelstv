@@ -151,7 +151,7 @@ volume, and shows a picture of the screen. The API (all `GET` unless shown):
 | `/` | the page (only the status while read-only) | yes |
 | `/api/status` | Wi-Fi, battery, memory, the bridge, playback, Web control and OTA | yes |
 | `POST /api/ota` | an app image (`channelstv-<version>-ota.bin`) to flash and restart into | its own switch |
-| `/api/settings?bridge=host[:port]&profile=esp32\|esp32_4x3&volume=0..100` | sets any of them; `bridge=` empty goes back to finding it | |
+| `/api/settings?bridge=host[:port]&picture=16x9\|4x3&volume=0..100` | sets any of them; `bridge=` empty goes back to finding it | |
 | `/api/rescan` | looks for the bridge again | |
 | `/api/browse?id=ID&start=N` | a page of a folder (`0` is the top) | |
 | `/api/search?q=WORDS&start=N` | recordings, movies and shows whose titles hold every word; `{"no_search":true}` if the bridge can't search (the page then looks through its folders) | |
@@ -191,21 +191,22 @@ Clear the field to go back to finding the bridge automatically.
 
 ## Bridge setup
 
-The board asks for the client profile `esp32` (16:9, 240x144), or `esp32_4x3` (the centre 4:3
-of the picture, 240x192) if that is chosen on the web page. It adds `?profile=<name>` to its
-requests and sends the User-Agent `channelstv/<version>`. Without these clients the bridge sends
-the DVR's original stream, which the board can't decode.
+The board asks for the client profile `esp32` (16:9, 240x144). It adds `?profile=esp32` to its
+requests and sends the User-Agent `channelstv/<version>`. Without this client the bridge sends
+the DVR's original stream, which the board can't decode. For the centre 4:3 of the picture
+(Picture in Settings or on the web page) it adds the bridge's overrides
+`w=240&h=192&fit=crop43` to the stream URLs, so it needs a bridge that takes them.
 
-The board checks them whenever it finds the bridge: it reads the bridge's `/api/state` (it never
-writes to the bridge) and wants each client to transcode to H.264 `baseline`, one slice a frame
-(`single_slice`), at most 240 pixels wide. If the profile it asks for is missing or different,
-it doesn't play. The screen says "Bridge needs the esp32 profile, see README" with the
-reason, and so do the web page and `/api/status` (`bridge.profile_problem`, and
-`bridge.profiles` for both). A stream that still won't decode ends with the same message.
+The board checks the profile whenever it finds the bridge: it reads the bridge's `/api/state` (it
+never writes to the bridge) and wants the client to transcode to H.264 `baseline`, one slice a
+frame (`single_slice`), at most 240 pixels wide. If it is missing or different, the board
+doesn't play. The screen says "Bridge needs the esp32 profile, see README" with the
+reason, and so do the web page and `/api/status` (`bridge.profile_problem`). A stream that still
+won't decode ends with the same message.
 
-Add the two clients on the bridge's settings page, or with `curl` and
+Add the client on the bridge's settings page, or with `curl` and
 [`jq`](https://jqlang.org/). `PUT /api/config` takes the whole configuration, so this reads the
-current one from `/api/state`, puts the two clients in (replacing any with the same names) and
+current one from `/api/state`, puts the client in (replacing any with the same name) and
 sends it back:
 
 ```sh
@@ -215,13 +216,8 @@ curl -s $BRIDGE/api/state | jq --argjson new '[
    "profile": {"mode": "transcode", "ads": "cut", "seek": "time",
      "transcode": {"max_width": 240, "max_height": 144, "fps": 24, "video_kbps": 250,
        "audio_kbps": 64, "audio_channels": 1, "h264_profile": "baseline",
-       "pre_scale": true, "exact_size": true, "single_slice": true}}},
-  {"name": "esp32_4x3",
-   "profile": {"mode": "transcode", "ads": "cut", "seek": "time",
-     "transcode": {"max_width": 240, "max_height": 192, "fps": 24, "video_kbps": 250,
-       "audio_kbps": 64, "audio_channels": 1, "h264_profile": "baseline",
-       "pre_scale": true, "exact_size": true, "crop": "4:3", "single_slice": true}}}
-]' '.config | .clients = ([.clients[]? | select(.name != "esp32" and .name != "esp32_4x3")] + $new)' |
+       "pre_scale": true, "exact_size": true, "single_slice": true}}}
+]' '.config | .clients = ([.clients[]? | select(.name != "esp32")] + $new)' |
 curl -s -X PUT -H 'Content-Type: application/json' --data-binary @- $BRIDGE/api/config
 ```
 

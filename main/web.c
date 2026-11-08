@@ -183,8 +183,8 @@ static esp_err_t settings(httpd_req_t *req)
     if (query_str(req, "bridge", v, sizeof(v))) {
         bridge_set_override(v);
     }
-    if (query_str(req, "profile", v, sizeof(v))) {
-        bridge_set_profile(v);
+    if (query_str(req, "picture", v, sizeof(v))) {
+        bridge_set_picture(v);
     }
     int vol = query_int(req, "volume", -1);
     if (vol >= 0) {
@@ -192,7 +192,7 @@ static esp_err_t settings(httpd_req_t *req)
     }
     cJSON *root = cJSON_CreateObject();
     cJSON_AddStringToObject(root, "bridge", bridge_override());
-    cJSON_AddStringToObject(root, "profile", bridge_profile());
+    cJSON_AddStringToObject(root, "picture", bridge_picture());
     cJSON_AddNumberToObject(root, "volume", app_volume());
     return send_json(req, root);
 }

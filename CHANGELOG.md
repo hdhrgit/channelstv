@@ -1,5 +1,13 @@
 # Changelog
 
+## Unreleased
+
+- The centre 4:3 picture comes from the `esp32` profile with the bridge's overrides
+  (`w=240&h=192&fit=crop43`); the bridge needs only the one client, and the `esp32_4x3` one can go.
+- `/api/settings` takes `picture=16x9|4x3` instead of `profile=`; `/api/status` says
+  `bridge.picture` and no longer `bridge.profiles`. The 4:3 choice starts over at 16:9.
+- Needs: a bridge that takes the stream overrides, for the 4:3 picture.
+
 ## v0.3.0 (2026-11-07)
 
 - Web page: search the titles of recordings, movies and shows, with the bridge's UPnP Search

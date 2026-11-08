@@ -39,10 +39,10 @@ void bridge_rescan(void);
 // The address set by hand ("192.0.2.10" or "my-dvr:8200"), empty for discovery. Saved in NVS.
 const char *bridge_override(void);
 void bridge_set_override(const char *host_port);
-// The bridge's client profile the board asks for: "esp32" (16:9, 240x144) or "esp32_4x3"
-// (the centre 4:3 of the picture, 240x192). Saved in NVS.
-const char *bridge_profile(void);
-void bridge_set_profile(const char *name);
+// The picture the board asks the bridge for: "16x9" (the esp32 profile's 240x144) or "4x3" (the
+// centre 4:3 of the picture, 240x192, with the bridge's w, h and fit overrides). Saved in NVS.
+const char *bridge_picture(void);
+void bridge_set_picture(const char *shape);
 
 typedef struct {
     char id[80];
@@ -50,7 +50,7 @@ typedef struct {
     bool container;
     int children;     // a container's childCount, -1 if it didn't say
     bool live;        // a channel (upnp:class ...videoBroadcast): endless
-    char url[256];    // an item's stream, with the profile asked for
+    char url[256];    // an item's stream, with the profile and picture asked for
     int duration_s;   // a recording's length (without its ads if they are cut), 0 if unknown
     bool time_seek;   // offered with DLNA time seek (DLNA.ORG_OP=1x): it starts where a
                       // TimeSeekRange.dlna.org request header says
@@ -68,16 +68,15 @@ int bridge_browse(const char *id, int start, int max, cd_entry_t *out, int *tota
 // holding every word of words, ignoring case. Same answer as bridge_browse(); -2 if the bridge has no Search.
 int bridge_search(const char *words, int start, int max, cd_entry_t *out, int *total);
 
-// What is wrong with the bridge's client profile the board asks for (bridge_profile()): no such
+// What is wrong with the bridge's esp32 client profile: no such
 // client, not transcoding, not H.264 baseline, not one slice a frame, wider than 240. False if
 // it's fine, or the bridge's settings couldn't be read. Checked whenever the bridge is found.
 bool bridge_profile_problem(char *out, size_t len);
-// Reads the bridge's client profiles again, now (blocks for up to 4 s); true if the one the
-// board asks for is wrong.
+// Reads the bridge's client profile again, now (blocks for up to 4 s); true if it is wrong.
 bool bridge_recheck_profiles(void);
 // The message the screen and the web page show for a wrong profile
 #define BRIDGE_PROFILE_HELP "Bridge needs the esp32 profile, see README"
 
-// {"state":..,"base":..,"name":..,"found_by":..,"override":..,"profile":..,"udn":..,
-//  "profile_problem":"" or why, "profiles":{"esp32":"ok" or why,"esp32_4x3":..}}
+// {"state":..,"base":..,"name":..,"found_by":..,"override":..,"picture":..,"udn":..,
+//  "profile_problem":"" or why}
 void bridge_status_json(char *out, size_t len);

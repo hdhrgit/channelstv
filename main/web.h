@@ -3,7 +3,7 @@
 // nothing runs. While the setup hotspot is open its page and /api/wifi* always answer.
 //   GET  /                      status and settings
 //   GET  /api/status            Wi-Fi, battery, memory, the bridge and playback
-//   GET  /api/settings[?bridge=host[:port]][&profile=esp32|esp32_4x3][&volume=0..100]
+//   GET  /api/settings[?bridge=host[:port]][&picture=16x9|4x3][&volume=0..100]
 //                               bridge= with nothing after it goes back to discovery
 //   GET  /api/rescan            looks for the bridge again
 //   GET  /api/browse?id=ID[&start=N]  a page of a ContentDirectory folder ("0" is the top)

@@ -241,7 +241,7 @@ static void settings_rows(void)
         memset(e, 0, sizeof(*e));
         snprintf(e->id, sizeof(e->id), "#set%d", k);
         if (k == SET_PICTURE) {
-            snprintf(e->title, sizeof(e->title), "Picture: %s", !strcmp(bridge_profile(), "esp32_4x3") ? "4:3 centre" : "16:9");
+            snprintf(e->title, sizeof(e->title), "Picture: %s", !strcmp(bridge_picture(), "4x3") ? "4:3 centre" : "16:9");
         } else if (k == SET_WEB) {
             snprintf(e->title, sizeof(e->title), "Web control: %s", web[app_web_mode()]);
         } else if (k == SET_OTA) {
@@ -1126,7 +1126,7 @@ static void activate_row(int i)
             s_cal_step = 0;
             break;
         case SET_PICTURE:
-            bridge_set_profile(!strcmp(bridge_profile(), "esp32_4x3") ? "esp32" : "esp32_4x3");
+            bridge_set_picture(!strcmp(bridge_picture(), "4x3") ? "16x9" : "4x3");
             settings_rows();
             break;
         case SET_ROTATION: // auto, 0, 90, 180, 270, auto, ...

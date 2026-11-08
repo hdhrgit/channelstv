@@ -35,13 +35,14 @@ static char s_name[64];
 static char s_udn[64];
 static const char *s_found_by = "";
 static char s_override[64];
-static char s_profile[16] = "esp32";
+static bool s_4x3;
 static volatile unsigned s_gen;
 static volatile bool s_rescan = true;
-// What is wrong with each of the bridge's client profiles the board asks for ("" when it's fine
-// or couldn't be read), from its /api/state
-static const char *const s_profiles[2] = {"esp32", "esp32_4x3"};
-static char s_problem[2][96];
+// The bridge's client profile the board asks for, and the overrides it adds for the centre 4:3
+#define PROFILE "esp32"
+#define OVERRIDES_4X3 "w=240&h=192&fit=crop43"
+// What is wrong with that profile ("" when it's fine or couldn't be read), from its /api/state
+static char s_problem[96];
 static volatile bool s_recheck;
 static TaskHandle_t s_task;
 
@@ -86,15 +87,15 @@ void bridge_set_override(const char *host_port)
     bridge_rescan();
 }
 
-const char *bridge_profile(void)
+const char *bridge_picture(void)
 {
-    return s_profile;
+    return s_4x3 ? "4x3" : "16x9";
 }
 
-void bridge_set_profile(const char *name)
+void bridge_set_picture(const char *shape)
 {
-    strlcpy(s_profile, !strcmp(name, "esp32_4x3") ? "esp32_4x3" : "esp32", sizeof(s_profile));
-    nvs_put("profile", s_profile);
+    s_4x3 = !strcmp(shape, "4x3");
+    nvs_put("picture", bridge_picture());
 }
 
 // ---------------------------------------------------------------- HTTP
@@ -262,7 +263,7 @@ static void use(const device_t *dev, const char *by)
     ESP_LOGI(TAG, "bridge \"%s\" at %s (%s)", dev->name, dev->base, by);
 }
 
-// ---------------------------------------------------------------- the bridge's client profiles
+// ---------------------------------------------------------------- the bridge's client profile
 
 // What a client profile must be for the board to decode its streams; "" if it is.
 static void profile_problem(const cJSON *clients, const char *name, char *out, size_t len)
@@ -292,36 +293,32 @@ static void profile_problem(const cJSON *clients, const char *name, char *out, s
     }
 }
 
-// Reads the client profiles from the bridge's /api/state (the board never writes to it). If
-// the state can't be read or has no config, nothing is held against the profiles.
+// Reads the client profile from the bridge's /api/state (the board never writes to it). If
+// the state can't be read or has no config, nothing is held against the profile.
 static void check_profiles(const char *base, char *buf)
 {
-    char url[128], problem[2][96] = {"", ""};
+    char url[128], problem[96] = "";
     snprintf(url, sizeof(url), "%s/api/state", base);
     cJSON *root = http_get(url, buf, DESC_MAX, 4000) > 0 ? cJSON_Parse(buf) : NULL;
     const cJSON *clients = cJSON_GetObjectItem(cJSON_GetObjectItem(root, "config"), "clients");
     if (cJSON_IsArray(clients)) {
-        for (int i = 0; i < 2; i++) {
-            profile_problem(clients, s_profiles[i], problem[i], sizeof(problem[i]));
-        }
+        profile_problem(clients, PROFILE, problem, sizeof(problem));
     } else {
         ESP_LOGW(TAG, "can't read the bridge's client profiles");
     }
     cJSON_Delete(root);
     xSemaphoreTake(s_lock, portMAX_DELAY);
-    memcpy(s_problem, problem, sizeof(s_problem));
+    strlcpy(s_problem, problem, sizeof(s_problem));
     xSemaphoreGive(s_lock);
-    for (int i = 0; i < 2; i++) {
-        if (problem[i][0]) {
-            ESP_LOGW(TAG, "bridge profile: %s", problem[i]);
-        }
+    if (problem[0]) {
+        ESP_LOGW(TAG, "bridge profile: %s", problem);
     }
 }
 
 bool bridge_profile_problem(char *out, size_t len)
 {
     xSemaphoreTake(s_lock, portMAX_DELAY);
-    strlcpy(out, s_problem[!strcmp(s_profile, "esp32_4x3")], len);
+    strlcpy(out, s_problem, len);
     xSemaphoreGive(s_lock);
     return out[0];
 }
@@ -344,7 +341,7 @@ static void lose(bridge_state_t why)
     bool had = s_base[0];
     s_base[0] = s_control[0] = s_name[0] = '\0';
     s_found_by = "";
-    s_problem[0][0] = s_problem[1][0] = '\0';
+    s_problem[0] = '\0';
     s_state = why;
     if (had) {
         s_gen++;
@@ -502,11 +499,9 @@ void bridge_start(bool (*online)(void))
     s_online = online;
     s_lock = xSemaphoreCreateMutex();
     nvs_str("override", s_override, sizeof(s_override));
-    char p[16] = "";
-    nvs_str("profile", p, sizeof(p));
-    if (p[0]) {
-        strlcpy(s_profile, p, sizeof(s_profile));
-    }
+    char p[8] = "";
+    nvs_str("picture", p, sizeof(p));
+    s_4x3 = !strcmp(p, "4x3");
     // internal stack: it writes NVS (flash)
     xTaskCreate(bridge_task, "bridge", 6144, NULL, 3, &s_task);
 }
@@ -560,13 +555,17 @@ unsigned bridge_gen(void)
 
 // ---------------------------------------------------------------- ContentDirectory
 
-// The stream URL with ?profile=<ours>, unless it names a profile already.
+// The stream URL with ?profile=esp32 unless it names a profile already, and for the centre 4:3
+// the bridge's overrides for that picture.
 static void with_profile(const char *url, char *out, size_t len)
 {
-    if (strstr(url, "profile=")) {
-        strlcpy(out, url, len);
-    } else {
-        snprintf(out, len, "%s%cprofile=%s", url, strchr(url, '?') ? '&' : '?', s_profile);
+    strlcpy(out, url, len);
+    if (!strstr(url, "profile=")) {
+        snprintf(out, len, "%s%cprofile=" PROFILE, url, strchr(url, '?') ? '&' : '?');
+    }
+    if (s_4x3 && !strstr(out, "fit=")) {
+        size_t n = strlen(out);
+        snprintf(out + n, len - n, "%c" OVERRIDES_4X3, strchr(out, '?') ? '&' : '?');
     }
 }
 
@@ -694,7 +693,7 @@ static int cd_call(const char *action, const char *args, int max, cd_entry_t *ou
     char control[200];
     xSemaphoreTake(s_lock, portMAX_DELAY);
     // the profile on the request too: the bridge then hands out stream URLs made for it
-    snprintf(control, sizeof(control), "%s%sprofile=%s", s_control, strchr(s_control, '?') ? "&" : "?", s_profile);
+    snprintf(control, sizeof(control), "%s%sprofile=" PROFILE, s_control, strchr(s_control, '?') ? "&" : "?");
     bool have = s_control[0];
     xSemaphoreGive(s_lock);
     *total = 0;
@@ -829,23 +828,18 @@ int bridge_search(const char *words, int start, int max, cd_entry_t *out, int *t
 
 void bridge_status_json(char *out, size_t len)
 {
-    char base[96], problem[2][96];
+    char base[96], problem[96];
     bridge_base(base, sizeof(base));
     xSemaphoreTake(s_lock, portMAX_DELAY);
-    memcpy(problem, s_problem, sizeof(problem));
+    strlcpy(problem, s_problem, sizeof(problem));
     xSemaphoreGive(s_lock);
-    for (int i = 0; i < 2; i++) { // the bridge's own words in there: keep the JSON whole
-        for (char *c = problem[i]; *c; c++) {
-            if (*c == '"' || *c == '\\' || (unsigned char)*c < 0x20) {
-                *c = '\'';
-            }
+    for (char *c = problem; *c; c++) { // the bridge's own words in there: keep the JSON whole
+        if (*c == '"' || *c == '\\' || (unsigned char)*c < 0x20) {
+            *c = '\'';
         }
     }
     snprintf(out, len,
              "{\"state\":\"%s\",\"base\":\"%s\",\"name\":\"%s\",\"found_by\":\"%s\",\"override\":\"%s\","
-             "\"profile\":\"%s\",\"udn\":\"%s\",\"profile_problem\":\"%s\","
-             "\"profiles\":{\"esp32\":\"%s\",\"esp32_4x3\":\"%s\"}}",
-             bridge_state_text(), base, s_name, s_found_by, s_override, s_profile, s_udn,
-             problem[!strcmp(s_profile, "esp32_4x3")], problem[0][0] ? problem[0] : "ok",
-             problem[1][0] ? problem[1] : "ok");
+             "\"picture\":\"%s\",\"udn\":\"%s\",\"profile_problem\":\"%s\"}",
+             bridge_state_text(), base, s_name, s_found_by, s_override, bridge_picture(), s_udn, problem);
 }
