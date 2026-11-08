@@ -1488,9 +1488,15 @@ static void refresh(lv_timer_t *timer)
         board_battery(&s_bat);
         s_bat_at = now;
     }
-    // on battery, dim after a minute and go dark after five; any touch or key brings it back
-    int64_t inactive = lv_display_get_inactive_time(NULL);
+    // on battery, dim after a minute and go dark after five; any touch or key brings it back.
+    // They count from unplugging, not from the last touch while on USB.
+    static bool was_on_battery;
     bool on_battery = !s_bat.usb;
+    if (on_battery && !was_on_battery) {
+        lv_display_trigger_activity(NULL);
+    }
+    was_on_battery = on_battery;
+    int64_t inactive = lv_display_get_inactive_time(NULL);
     bool dim = on_battery && inactive > DIM_AFTER_MS, off = on_battery && inactive > OFF_AFTER_MS;
     if (dim != s_dimmed || off != s_screen_off) {
         s_dimmed = dim;
