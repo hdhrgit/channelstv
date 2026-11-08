@@ -66,6 +66,16 @@
     <option value="2">180°</option>
     <option value="3">270° (board turned anticlockwise)</option>
   </select>
+  <label for="brightness">Brightness</label>
+  <select id="brightness">
+    <option value="20">20%</option><option value="40">40%</option><option value="60">60%</option>
+    <option value="80">80%</option><option value="100">100%</option>
+  </select>
+  <label for="dim">Dim on battery after</label>
+  <select id="dim">
+    <option value="1">1 min</option><option value="5">5 min</option><option value="10">10 min</option>
+    <option value="never">never</option>
+  </select>
   <label for="volume">Volume <span id="volv"></span></label>
   <input id="volume" type="range" min="0" max="100">
   <div class="row">
@@ -119,6 +129,7 @@ async function refresh() {
       $('volume').value = s.volume;
       $('volv').textContent = s.volume + '%';
       fetch('/api/rotation').then(r => r.json()).then(r => $('rotation').value = String(r.setting)).catch(() => {});
+      fetch('/api/settings').then(r => r.json()).then(r => { $('brightness').value = String(r.brightness); $('dim').value = String(r.dim); }).catch(() => {});
     }
   } catch (e) {
     $('status').innerHTML = '<dt>Status</dt><dd class="bad">the board doesn\'t answer</dd>';
@@ -127,7 +138,7 @@ async function refresh() {
 
 $('volume').oninput = () => $('volv').textContent = $('volume').value + '%';
 $('save').onclick = async () => {
-  const q = new URLSearchParams({bridge: $('bridge').value.trim(), picture: $('picture').value, volume: $('volume').value});
+  const q = new URLSearchParams({bridge: $('bridge').value.trim(), picture: $('picture').value, volume: $('volume').value, brightness: $('brightness').value, dim: $('dim').value});
   await fetch('/api/settings?' + q);
   await fetch('/api/rotation?set=' + $('rotation').value);
   setTimeout(refresh, 500);

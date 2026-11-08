@@ -190,10 +190,23 @@ static esp_err_t settings(httpd_req_t *req)
     if (vol >= 0) {
         app_set_volume(vol);
     }
+    int bright = query_int(req, "brightness", -1);
+    if (bright >= 0) {
+        ui_set_brightness(bright);
+    }
+    if (query_str(req, "dim", v, sizeof(v))) {
+        ui_set_dim_minutes(!strcmp(v, "never") ? 0 : atoi(v));
+    }
     cJSON *root = cJSON_CreateObject();
     cJSON_AddStringToObject(root, "bridge", bridge_override());
     cJSON_AddStringToObject(root, "picture", bridge_picture());
     cJSON_AddNumberToObject(root, "volume", app_volume());
+    cJSON_AddNumberToObject(root, "brightness", ui_brightness());
+    if (ui_dim_minutes()) {
+        cJSON_AddNumberToObject(root, "dim", ui_dim_minutes());
+    } else {
+        cJSON_AddStringToObject(root, "dim", "never");
+    }
     return send_json(req, root);
 }
 

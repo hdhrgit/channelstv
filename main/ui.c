@@ -41,10 +41,11 @@
 #define C_WARN   0xffb74d
 #define C_BAD    0xef5350
 
-#define BL_ON        80
 #define BL_DIM       10
-#define DIM_AFTER_MS 60000  // on battery, the screen dims after this long untouched ...
-#define OFF_AFTER_MS 300000 // ... and goes dark after this (a touch or a key brings it back)
+// The backlight's level (Settings, saved), and on battery how many minutes untouched before
+// the screen dims (0: never); it goes dark DARK_AFTER_MIN minutes after that.
+static int s_bright = 80, s_dim_min = 1;
+#define DARK_AFTER_MIN 4
 
 #define HEAD_H   32
 #define ROWS     4                          // rows a page
@@ -226,13 +227,13 @@ static bool at_settings(void)
     return !strcmp(s_stack[s_depth - 1].id, SETTINGS_ID);
 }
 
-enum { SET_TOUCH, SET_PICTURE, SET_ROTATION, SET_OTA, SET_WEB, SET_FIND, SET_ABOUT, SET_N };
+enum { SET_TOUCH, SET_PICTURE, SET_ROTATION, SET_BRIGHT, SET_DIM, SET_OTA, SET_WEB, SET_FIND, SET_ABOUT, SET_N };
 
 // Settings, a page at a time like any folder.
 static void settings_rows(void)
 {
-    static const char *const titles[SET_N] = {"Touch test", "Picture", "Rotation", "OTA updates", "Web control",
-                                              "Find the bridge again", "About"};
+    static const char *const titles[SET_N] = {"Touch test", "Picture", "Rotation", "Backlight", "Dim",
+                                              "OTA updates", "Web control", "Find the bridge again", "About"};
     static const char *const web[] = {"full", "read-only", "off"};
     static const char *const rotations[] = {"auto", "0\u00b0", "90\u00b0", "180\u00b0", "270\u00b0"};
     int first = s_stack[s_depth - 1].page * ROWS;
@@ -249,6 +250,14 @@ static void settings_rows(void)
             snprintf(e->title, sizeof(e->title), "OTA updates: %s", app_ota_enabled() ? "on" : "off");
         } else if (k == SET_ROTATION) {
             snprintf(e->title, sizeof(e->title), "Rotation: %s", rotations[rotate_setting() + 1]);
+        } else if (k == SET_BRIGHT) {
+            snprintf(e->title, sizeof(e->title), "Backlight: %d%%", s_bright);
+        } else if (k == SET_DIM) {
+            if (s_dim_min) {
+                snprintf(e->title, sizeof(e->title), "Dim: %d min", s_dim_min); // on battery
+            } else {
+                strlcpy(e->title, "Dim: never", sizeof(e->title));
+            }
         } else {
             strlcpy(e->title, titles[k], sizeof(e->title));
         }
@@ -1037,6 +1046,57 @@ static void pad_key(char k)
 
 // ---------------------------------------------------------------- touch test
 
+static void display_load(void)
+{
+    nvs_handle_t h;
+    if (nvs_open(NVS_NS, NVS_READONLY, &h) == ESP_OK) {
+        int32_t v;
+        if (nvs_get_i32(h, "bright", &v) == ESP_OK && v >= 20 && v <= 100) {
+            s_bright = v;
+        }
+        if (nvs_get_i32(h, "dim", &v) == ESP_OK && v >= 0 && v <= 10) {
+            s_dim_min = v;
+        }
+        nvs_close(h);
+    }
+}
+
+static void display_save(const char *key, int v)
+{
+    nvs_handle_t h;
+    if (nvs_open(NVS_NS, NVS_READWRITE, &h) == ESP_OK) {
+        nvs_set_i32(h, key, v);
+        nvs_commit(h);
+        nvs_close(h);
+    }
+}
+
+int ui_brightness(void)
+{
+    return s_bright;
+}
+
+void ui_set_brightness(int percent)
+{
+    percent = percent < 20 ? 20 : percent > 100 ? 100 : percent;
+    s_bright = percent;
+    display_save("bright", percent);
+    if (!s_dimmed && !s_screen_off) {
+        board_backlight(percent);
+    }
+}
+
+int ui_dim_minutes(void)
+{
+    return s_dim_min;
+}
+
+void ui_set_dim_minutes(int minutes)
+{
+    s_dim_min = minutes <= 0 ? 0 : minutes < 5 ? 1 : minutes < 10 ? 5 : 10;
+    display_save("dim", s_dim_min);
+}
+
 static void cal_load(void)
 {
     nvs_handle_t h;
@@ -1132,6 +1192,14 @@ static void activate_row(int i)
             break;
         case SET_ROTATION: // auto, 0, 90, 180, 270, auto, ...
             rotate_set(rotate_setting() >= 3 ? ROTATE_AUTO : rotate_setting() + 1);
+            settings_rows();
+            break;
+        case SET_BRIGHT: // 20, 40, 60, 80, 100, 20, ...
+            ui_set_brightness(s_bright >= 100 ? 20 : (s_bright / 20 + 1) * 20);
+            settings_rows();
+            break;
+        case SET_DIM: // 1, 5, 10 min, never, 1, ...
+            ui_set_dim_minutes(s_dim_min == 1 ? 5 : s_dim_min == 5 ? 10 : s_dim_min == 10 ? 0 : 1);
             settings_rows();
             break;
         case SET_OTA:
@@ -1488,7 +1556,7 @@ static void refresh(lv_timer_t *timer)
         board_battery(&s_bat);
         s_bat_at = now;
     }
-    // on battery, dim after a minute and go dark after five; any touch or key brings it back.
+    // on battery, dim after s_dim_min and go dark a few minutes later; any touch or key brings it back.
     // They count from unplugging, not from the last touch while on USB.
     static bool was_on_battery;
     bool on_battery = !s_bat.usb;
@@ -1497,11 +1565,13 @@ static void refresh(lv_timer_t *timer)
     }
     was_on_battery = on_battery;
     int64_t inactive = lv_display_get_inactive_time(NULL);
-    bool dim = on_battery && inactive > DIM_AFTER_MS, off = on_battery && inactive > OFF_AFTER_MS;
+    int64_t dim_ms = s_dim_min * 60000LL;
+    bool dim = on_battery && s_dim_min && inactive > dim_ms;
+    bool off = dim && inactive > dim_ms + DARK_AFTER_MIN * 60000LL;
     if (dim != s_dimmed || off != s_screen_off) {
         s_dimmed = dim;
         s_screen_off = off;
-        board_backlight(off ? 0 : dim ? BL_DIM : BL_ON);
+        board_backlight(off ? 0 : dim ? BL_DIM : s_bright);
     }
     if (s_back_wanted) {
         s_back_wanted = false;
@@ -1693,6 +1763,7 @@ void ui_start(void)
     s_ctl = xQueueCreate(8, sizeof(ctl_t));
     strcpy(s_stack[0].id, "0");
     cal_load();
+    display_load();
     lvgl_port_cfg_t port = ESP_LVGL_PORT_INIT_CONFIG();
     port.task_affinity = 0;
     port.task_stack = 8192;
@@ -1743,7 +1814,7 @@ void ui_start(void)
     lv_timer_create(refresh, 100, NULL);
     refresh(NULL);
     lvgl_port_unlock();
-    board_backlight(BL_ON);
+    board_backlight(s_bright);
     tv_set_touch_handler(on_tv_touch);
     // stack in PSRAM: it only does network I/O
     xTaskCreateWithCaps(browse_task, "browse", 6144, NULL, 3, NULL, MALLOC_CAP_SPIRAM);
@@ -1785,7 +1856,7 @@ void ui_back(void)
 void ui_backlight_full(void)
 {
     s_dimmed = s_screen_off = false; // refresh() dims it again once the screen has sat idle long enough
-    board_backlight(BL_ON);
+    board_backlight(s_bright);
 }
 
 void ui_power_hold(int held_ms)

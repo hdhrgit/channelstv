@@ -15,6 +15,13 @@ void ui_show_volume(int volume);
 // Full brightness now, even if idle on battery had dimmed it. Call with the LVGL lock held
 // (playback does, since the dimming timer can't run while it owns the screen).
 void ui_backlight_full(void);
+// The backlight's level in percent (20..100, saved), for the menus and playback alike.
+int ui_brightness(void);
+void ui_set_brightness(int percent);
+// On battery, minutes untouched before the screen dims (1, 5 or 10; 0 never), saved; it goes
+// dark a few minutes after that.
+int ui_dim_minutes(void);
+void ui_set_dim_minutes(int minutes);
 // The power-off countdown while PWR is held: held_ms of 3000 shows "Powering off",
 // 0 hides it. Safe from any task.
 void ui_power_hold(int held_ms);

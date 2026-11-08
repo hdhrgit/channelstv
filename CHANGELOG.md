@@ -1,5 +1,14 @@
 # Changelog
 
+## Unreleased
+
+- While charging, the heading shows the battery level next to the charge symbol. On the charger
+  the voltage reads high, so it maps through a charging curve: the level only rises and stays
+  at 99 % until charging ends.
+- Unplugging no longer turns the screen off at once: the dim timer starts when USB power goes.
+- Settings: Backlight (20 to 100 %, default 80) and Dim on battery (1, 5 or 10 min, or
+  never), also on the web page and in `/api/settings` (`brightness=`, `dim=`).
+
 ## v0.4.0 (2026-11-08)
 
 - The centre 4:3 picture comes from the `esp32` profile with the bridge's stream overrides

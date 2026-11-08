@@ -107,8 +107,9 @@ The setup page then offers **Back to <network>** for the one just forgotten.
   asks for the start with a `TimeSeekRange.dlna.org: npt=<seconds>-` request header. A
   recording offered without time seek plays from the start to the end.
 - **Settings:** Touch test (tap five dots; the board works out how the touch panel lines up with
-  the screen and keeps it), the picture shape (16:9 or the centre 4:3), Rotation, Find the
-  bridge again, About.
+  the screen and keeps it), the picture shape (16:9 or the centre 4:3), Rotation, Backlight
+  (20 to 100 %), Dim (on battery, after 1, 5 or 10 minutes untouched, or never; the screen goes
+  dark four minutes later, and a touch or key brings it back), Find the bridge again, About.
 - **Rotation:** by default the screen turns with the board. The motion sensor (QMI8658) says
   which edge is down; the picture turns once the board has stayed that way for a second, and
   not while it lies flat. Settings, the web page and `/api/rotation` set it to auto or a fixed
@@ -151,7 +152,7 @@ volume, and shows a picture of the screen. The API (all `GET` unless shown):
 | `/` | the page (only the status while read-only) | yes |
 | `/api/status` | Wi-Fi, battery, memory, the bridge, playback, Web control and OTA | yes |
 | `POST /api/ota` | an app image (`channelstv-<version>-ota.bin`) to flash and restart into | its own switch |
-| `/api/settings?bridge=host[:port]&picture=16x9\|4x3&volume=0..100` | sets any of them; `bridge=` empty goes back to finding it | |
+| `/api/settings?bridge=host[:port]&picture=16x9\|4x3&volume=0..100&brightness=20..100&dim=1\|5\|10\|never` | sets any of them; `bridge=` empty goes back to finding it | |
 | `/api/rescan` | looks for the bridge again | |
 | `/api/browse?id=ID&start=N` | a page of a folder (`0` is the top) | |
 | `/api/search?q=WORDS&start=N` | recordings, movies and shows whose titles hold every word; `{"no_search":true}` if the bridge can't search (the page then looks through its folders) | |
