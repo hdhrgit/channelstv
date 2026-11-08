@@ -108,10 +108,10 @@ The setup page then offers **Back to <network>** for the one just forgotten.
   recording offered without time seek plays from the start to the end.
 - **Settings:** Touch test (tap five dots; the board works out how the touch panel lines up with
   the screen and keeps it), the picture shape (16:9 or the centre 4:3), Rotation, Backlight
-  (20 to 100 %), Dim and Off (on battery, after
-  30 s or 1, 5 or 10 minutes untouched, and after 1, 5, 10 or 30 minutes, or never; a touch or key
-  brings it back), Find the bridge again, and Version (the firmware version; tap it for the board's address and the
-  bridge's address, version and how it was found).
+  (20 to 100 %), Dim and Off (on battery, after 30 s or 1, 5 or 10 minutes untouched, and after
+  1, 5, 10 or 30 minutes, or never; a touch or key brings it back), Find the bridge again, and
+  Version (the firmware version; tap it for the board's address and the bridge's address,
+  version, how it was found and its whole name).
 - **Rotation:** by default the screen turns with the board. The motion sensor (QMI8658) says
   which edge is down; the picture turns once the board has stayed that way for a second, and
   not while it lies flat. Settings, the web page and `/api/rotation` set it to auto or a fixed
@@ -146,8 +146,9 @@ which works the same way. While the setup hotspot is open, its page and `/api/wi
 whatever Web control says.
 
 With Web control **full**, the page shows the status, browses the bridge's folders, searches
-titles and plays from them, sets the bridge address, the picture shape, the rotation and the
-volume, and shows a picture of the screen. The API (all `GET` unless shown):
+titles and plays from them, sets the bridge address, the picture shape, the rotation, the
+backlight, when the screen dims and goes off on battery, and the volume, and shows a picture of
+the screen. The API (all `GET` unless shown):
 
 | Address | What it does | Read-only |
 |---|---|---|

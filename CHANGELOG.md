@@ -1,18 +1,5 @@
 # Changelog
 
-## Unreleased
-
-- While charging, the heading shows the battery level next to the charge symbol. On the charger
-  the voltage reads high, so it maps through a charging curve: the level only rises and stays
-  at 99 % until charging ends.
-- Unplugging no longer turns the screen off at once: the dim timer starts when USB power goes.
-- Settings: Backlight (20 to 100 %, default 80), and on battery Dim (30 s, 1, 5 or 10 min, or
-  never; default 1 min) and Off (1, 5, 10 or 30 min, or never; default 5 min), also on the web
-  page and in `/api/settings` (`brightness=`, `dim=`, `off=`).
-- Settings: About is now Version, with the version on the row; tapping it opens a page headed
-  with the version, showing the board's address and the bridge's address, version and how it
-  was found (no pop-up). The web page shows both versions, and `/api/status` the bridge's.
-
 ## v0.4.0 (2026-11-08)
 
 - The centre 4:3 picture comes from the `esp32` profile with the bridge's stream overrides
@@ -20,7 +7,22 @@
   can go.
 - `/api/settings` takes `picture=16x9|4x3` instead of `profile=`; `/api/status` says
   `bridge.picture` and no longer `bridge.profiles`. The 4:3 choice starts over at 16:9.
-- The screen refreshes at 48 Hz, twice the video's 24 fps.
+- The screen refreshes at 48 Hz, twice the video's 24 fps. The picture is turned in software,
+  so the panel is always written along its own scan, whichever way the board is held.
+- While charging, the heading shows the battery level next to the charge symbol. On the charger
+  the voltage reads high, so it maps through a charging curve: the level only rises and stays
+  at 99 % until charging ends.
+- Settings: Backlight (20 to 100 %, default 80), and on battery Dim (30 s, 1, 5 or 10 min, or
+  never; default 1 min) and Off (1, 5, 10 or 30 min, or never; default 5 min), also on the web
+  page and in `/api/settings` (`brightness=`, `dim=`, `off=`).
+- The dim timer starts when USB power goes, so unplugging no longer turns the screen off at
+  once; plugging in doesn't wake a dimmed or dark screen.
+- Settings: About is now Version, with the version on the row; tapping it opens a page headed
+  with the version, showing the board's address and the bridge's address, version, how it was
+  found and its whole name (a long name scrolls once). The web page shows both versions, and
+  `/api/status` the bridge's.
+- The heading's title no longer runs into the page number, and the bridge's name scrolls once,
+  slowly, when the top menu appears.
 - Needs: dlna-bridge v0.99.10 or later, for the 4:3 picture.
 
 ## v0.3.0 (2026-11-07)
