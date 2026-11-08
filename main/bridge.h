@@ -77,6 +77,9 @@ bool bridge_recheck_profiles(void);
 // The message the screen and the web page show for a wrong profile
 #define BRIDGE_PROFILE_HELP "Bridge needs the esp32 profile, see README"
 
-// {"state":..,"base":..,"name":..,"found_by":..,"override":..,"picture":..,"udn":..,
+// The bridge's own version ("" until it's known), read with its client profiles.
+void bridge_version(char *out, size_t len);
+
+// {"state":..,"base":..,"name":..,"found_by":..,"override":..,"picture":..,"udn":..,"version":..,
 //  "profile_problem":"" or why}
 void bridge_status_json(char *out, size_t len);

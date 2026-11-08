@@ -43,6 +43,7 @@ static volatile bool s_rescan = true;
 #define OVERRIDES_4X3 "w=240&h=192&fit=crop43"
 // What is wrong with that profile ("" when it's fine or couldn't be read), from its /api/state
 static char s_problem[96];
+static char s_bversion[24]; // the bridge's own version, from its /api/state
 static volatile bool s_recheck;
 static TaskHandle_t s_task;
 
@@ -301,6 +302,12 @@ static void check_profiles(const char *base, char *buf)
     snprintf(url, sizeof(url), "%s/api/state", base);
     cJSON *root = http_get(url, buf, DESC_MAX, 4000) > 0 ? cJSON_Parse(buf) : NULL;
     const cJSON *clients = cJSON_GetObjectItem(cJSON_GetObjectItem(root, "config"), "clients");
+    const cJSON *ver = cJSON_GetObjectItem(root, "version");
+    if (cJSON_IsString(ver)) {
+        xSemaphoreTake(s_lock, portMAX_DELAY);
+        strlcpy(s_bversion, ver->valuestring, sizeof(s_bversion));
+        xSemaphoreGive(s_lock);
+    }
     if (cJSON_IsArray(clients)) {
         profile_problem(clients, PROFILE, problem, sizeof(problem));
     } else {
@@ -313,6 +320,13 @@ static void check_profiles(const char *base, char *buf)
     if (problem[0]) {
         ESP_LOGW(TAG, "bridge profile: %s", problem);
     }
+}
+
+void bridge_version(char *out, size_t len)
+{
+    xSemaphoreTake(s_lock, portMAX_DELAY);
+    strlcpy(out, s_bversion, len);
+    xSemaphoreGive(s_lock);
 }
 
 bool bridge_profile_problem(char *out, size_t len)
@@ -342,6 +356,7 @@ static void lose(bridge_state_t why)
     s_base[0] = s_control[0] = s_name[0] = '\0';
     s_found_by = "";
     s_problem[0] = '\0';
+    s_bversion[0] = '\0';
     s_state = why;
     if (had) {
         s_gen++;
@@ -828,11 +843,17 @@ int bridge_search(const char *words, int start, int max, cd_entry_t *out, int *t
 
 void bridge_status_json(char *out, size_t len)
 {
-    char base[96], problem[96];
+    char base[96], problem[96], ver[24];
     bridge_base(base, sizeof(base));
     xSemaphoreTake(s_lock, portMAX_DELAY);
     strlcpy(problem, s_problem, sizeof(problem));
+    strlcpy(ver, s_bversion, sizeof(ver));
     xSemaphoreGive(s_lock);
+    for (char *c = ver; *c; c++) {
+        if (*c == '"' || *c == '\\' || (unsigned char)*c < 0x20) {
+            *c = '\'';
+        }
+    }
     for (char *c = problem; *c; c++) { // the bridge's own words in there: keep the JSON whole
         if (*c == '"' || *c == '\\' || (unsigned char)*c < 0x20) {
             *c = '\'';
@@ -840,6 +861,6 @@ void bridge_status_json(char *out, size_t len)
     }
     snprintf(out, len,
              "{\"state\":\"%s\",\"base\":\"%s\",\"name\":\"%s\",\"found_by\":\"%s\",\"override\":\"%s\","
-             "\"picture\":\"%s\",\"udn\":\"%s\",\"profile_problem\":\"%s\"}",
-             bridge_state_text(), base, s_name, s_found_by, s_override, bridge_picture(), s_udn, problem);
+             "\"picture\":\"%s\",\"udn\":\"%s\",\"version\":\"%s\",\"profile_problem\":\"%s\"}",
+             bridge_state_text(), base, s_name, s_found_by, s_override, bridge_picture(), s_udn, ver, problem);
 }

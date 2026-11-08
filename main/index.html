@@ -111,6 +111,7 @@ async function refresh() {
     const s = await (await fetch('/api/status')).json();
     const b = s.bridge || {}, tv = s.tv || {};
     const rows = [
+      ['Version', `v${esc(s.fw)}${b.version ? `, bridge v${esc(b.version)}` : ''}`],
       ['Bridge', b.state === 'found' ? `<span class="good">${esc(b.name || 'found')}</span> at ${esc(b.base)} (${esc(b.found_by)})` : `<span class="bad">${esc(b.state)}</span>`],
       ...(s.ota_enabled === false ? [['OTA', 'OTA updates are off — enable on the board: Settings → OTA updates']] : []),
       ...(b.profile_problem ? [['Profile', `<span class="bad">The bridge needs the esp32 profile (${esc(b.profile_problem)}): see the <a href="https://github.com/hdhrgit/channelstv#bridge-setup">README</a></span>`]] : []),

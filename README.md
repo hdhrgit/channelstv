@@ -110,7 +110,8 @@ The setup page then offers **Back to <network>** for the one just forgotten.
   the screen and keeps it), the picture shape (16:9 or the centre 4:3), Rotation, Backlight
   (20 to 100 %), Dim and Off (on battery, after
   30 s or 1, 5 or 10 minutes untouched, and after 1, 5, 10 or 30 minutes, or never; a touch or key
-  brings it back), Find the bridge again, About.
+  brings it back), Find the bridge again, and Version (the firmware version; tap it for the board's address and the
+  bridge's address, version and how it was found).
 - **Rotation:** by default the screen turns with the board. The motion sensor (QMI8658) says
   which edge is down; the picture turns once the board has stayed that way for a second, and
   not while it lies flat. Settings, the web page and `/api/rotation` set it to auto or a fixed
@@ -128,7 +129,7 @@ out); if the board falls minutes behind, it skips ahead to what the bridge has j
 ## Web page and API
 
 The board serves a web page and an HTTP API on port 80, at `http://<board-ip>/` (for example
-`http://192.0.2.10/`). Settings → **About** shows the board's address on its screen; the
+`http://192.0.2.10/`). Settings → **Version** shows the board's address on its screen; the
 router's list of devices has it too.
 
 **Web control** (Settings) says how much of it answers:

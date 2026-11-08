@@ -9,6 +9,9 @@
 - Settings: Backlight (20 to 100 %, default 80), and on battery Dim (30 s, 1, 5 or 10 min, or
   never; default 1 min) and Off (1, 5, 10 or 30 min, or never; default 5 min), also on the web
   page and in `/api/settings` (`brightness=`, `dim=`, `off=`).
+- Settings: About is now Version, with the version on the row; tapping it opens a page headed
+  with the version, showing the board's address and the bridge's address, version and how it
+  was found (no pop-up). The web page shows both versions, and `/api/status` the bridge's.
 
 ## v0.4.0 (2026-11-08)
 

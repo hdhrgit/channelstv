@@ -62,6 +62,7 @@ static int s_bright = 80, s_dim_s = 60, s_off_min = 5;
 #define RESUME_EVERY_US 15000000LL          // where it is, saved this often while it plays
 #define QR_PX    116                        // the setup hotspot's QR code, quiet zone not included
 #define SETTINGS_ID "#settings"
+#define VERSION_ID  "#version"
 #define NVS_NS   "channelstv"
 
 // LVGL's heap (CONFIG_LV_USE_CUSTOM_MALLOC): PSRAM. Through plain malloc its small blocks (widgets,
@@ -226,13 +227,24 @@ static bool at_settings(void)
     return !strcmp(s_stack[s_depth - 1].id, SETTINGS_ID);
 }
 
-enum { SET_TOUCH, SET_PICTURE, SET_ROTATION, SET_BRIGHT, SET_DIM, SET_OFF, SET_OTA, SET_WEB, SET_FIND, SET_ABOUT, SET_N };
+static bool at_version(void)
+{
+    return !strcmp(s_stack[s_depth - 1].id, VERSION_ID);
+}
+
+// Settings or Version: pages the board makes itself, not the bridge's folders.
+static bool at_local(void)
+{
+    return at_settings() || at_version();
+}
+
+enum { SET_TOUCH, SET_PICTURE, SET_ROTATION, SET_BRIGHT, SET_DIM, SET_OFF, SET_OTA, SET_WEB, SET_FIND, SET_VERSION, SET_N };
 
 // Settings, a page at a time like any folder.
 static void settings_rows(void)
 {
     static const char *const titles[SET_N] = {"Touch test", "Picture", "Rotation", "Backlight", "Dim", "Off",
-                                              "OTA updates", "Web control", "Find the bridge again", "About"};
+                                              "OTA updates", "Web control", "Find the bridge again", "Version"};
     static const char *const web[] = {"full", "read-only", "off"};
     static const char *const rotations[] = {"auto", "0\u00b0", "90\u00b0", "180\u00b0", "270\u00b0"};
     int first = s_stack[s_depth - 1].page * ROWS;
@@ -247,6 +259,8 @@ static void settings_rows(void)
             snprintf(e->title, sizeof(e->title), "Web control: %s", web[app_web_mode()]);
         } else if (k == SET_OTA) {
             snprintf(e->title, sizeof(e->title), "OTA updates: %s", app_ota_enabled() ? "on" : "off");
+        } else if (k == SET_VERSION) {
+            snprintf(e->title, sizeof(e->title), "Version: %s", CHANNELSTV_VERSION);
         } else if (k == SET_ROTATION) {
             snprintf(e->title, sizeof(e->title), "Rotation: %s", rotations[rotate_setting() + 1]);
         } else if (k == SET_BRIGHT) {
@@ -270,6 +284,44 @@ static void settings_rows(void)
         }
     }
     s_total = SET_N;
+}
+
+// What Version opens, under the heading "Version x.y.z": the board's address, and the bridge's
+// address, version and how it was found: rows that only show, each a name over its value.
+static void version_rows(void)
+{
+    net_t net;
+    app_net(&net);
+    char base[96], ver[24];
+    bridge_base(base, sizeof(base));
+    bridge_version(ver, sizeof(ver));
+    // "http://host:port" to "host:port", and no port when it is the usual one
+    const char *addr = strstr(base, "://") ? strstr(base, "://") + 3 : base;
+    char host[64];
+    strlcpy(host, addr, sizeof(host));
+    char *p = strrchr(host, ':');
+    if (p && !strcmp(p, ":8200")) {
+        *p = '\0';
+    }
+    s_count = 0;
+    for (int k = 1; k < 4; k++) { // the version itself is the page's heading
+        cd_entry_t *e = &s_entries[s_count++];
+        memset(e, 0, sizeof(*e));
+        snprintf(e->id, sizeof(e->id), "#version%d", k);
+        e->play_count = -1;
+        switch (k) {
+        case 1: snprintf(e->title, sizeof(e->title), "Board IP\n%s", net.ip[0] ? net.ip : "none"); break;
+        case 2:
+            if (base[0]) {
+                snprintf(e->title, sizeof(e->title), "Bridge (%s)\n%s", bridge_found_by(), host);
+            } else {
+                strlcpy(e->title, "Bridge\nnone", sizeof(e->title));
+            }
+            break;
+        default: snprintf(e->title, sizeof(e->title), "Bridge version\n%s", ver[0] ? ver : "unknown"); break;
+        }
+    }
+    s_total = s_count;
 }
 
 // The top folder lists the bridge's folders and, after them, Settings.
@@ -317,8 +369,12 @@ static void request_page(void)
 {
     level_t *lv = &s_stack[s_depth - 1];
     s_req_gen++;
-    if (at_settings()) {
-        settings_rows();
+    if (at_local()) {
+        if (at_settings()) {
+            settings_rows();
+        } else {
+            version_rows();
+        }
         s_result_gen++;
         return;
     }
@@ -1199,9 +1255,10 @@ static void activate_row(int i)
         return;
     }
     const cd_entry_t *e = &s_entries[i];
+    if (at_version()) {
+        return; // rows that only show
+    }
     if (at_settings()) {
-        net_t net;
-        char text[200], base[96];
         switch (s_stack[s_depth - 1].page * ROWS + i) {
         case SET_TOUCH:
             s_view = VIEW_CAL;
@@ -1247,13 +1304,12 @@ static void activate_row(int i)
             bridge_rescan();
             toast("Searching...", 1500);
             break;
-        case SET_ABOUT:
-            app_net(&net);
-            bridge_base(base, sizeof(base));
-            snprintf(text, sizeof(text), "channelstv %s\n%s\nBridge: %s\n%s", CHANNELSTV_VERSION, net.ip,
-                     base[0] ? bridge_found_by() : "none", bridge_name());
-            toast(text, 5000);
-            break;
+        case SET_VERSION: {
+            cd_entry_t page = {.id = VERSION_ID, .container = true};
+            snprintf(page.title, sizeof(page.title), "Version %s", CHANNELSTV_VERSION);
+            open_folder(&page);
+            return;
+        }
         }
         s_result_gen++;
         return;
@@ -1539,7 +1595,7 @@ static void rebuild(void)
         return;
     }
     head_set(s_depth == 1 ? (bridge_name()[0] ? bridge_name() : "channelstv") : lv->title);
-    if (bridge_state() != BRIDGE_FOUND && !at_settings()) {
+    if (bridge_state() != BRIDGE_FOUND && !at_local()) {
         rows_hidden();
         bridge_note();
         return;
@@ -1571,9 +1627,14 @@ static void rebuild(void)
         } else {
             strlcpy(text, e->title, sizeof(text));
         }
+        // the Version page's rows are a name over its value: smaller, on two lines
+        bool two = at_version();
+        lv_obj_set_style_text_font(s_row_text[i], two ? f18 : f22, 0);
+        lv_label_set_long_mode(s_row_text[i], two ? LV_LABEL_LONG_WRAP : LV_LABEL_LONG_DOT);
+        lv_obj_set_height(s_row_text[i], two ? 44 : 28);
         lbl(s_row_text[i], text);
-        show(s_row_new[i], !at_settings() && !e->container && !e->live && e->play_count == 0);
-        lbl(s_row_icon[i], at_settings() ? LV_SYMBOL_SETTINGS
+        show(s_row_new[i], !at_local() && !e->container && !e->live && e->play_count == 0);
+        lbl(s_row_icon[i], at_local() ? LV_SYMBOL_SETTINGS
                            : !strcmp(e->id, SETTINGS_ID) ? LV_SYMBOL_SETTINGS
                            : e->container ? LV_SYMBOL_DIRECTORY : e->live ? LV_SYMBOL_EYE_OPEN : LV_SYMBOL_VIDEO);
         lv_obj_set_style_bg_color(s_row[i], lv_color_hex(C_PANEL), 0);
