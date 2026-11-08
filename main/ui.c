@@ -1409,6 +1409,18 @@ static void rows_hidden(void)
 }
 
 // The setup hotspot: its QR code (a phone camera offers to join), what to do, how it's going.
+// The heading's title as given: LVGL shortens it with dots in the label's own text, so that
+// can't be compared or used to redo the dots at another width (head_fit).
+static char s_head_text[112];
+
+static void head_set(const char *text)
+{
+    if (strcmp(s_head_text, text) != 0) {
+        strlcpy(s_head_text, text, sizeof(s_head_text));
+        lv_label_set_text(s_head, s_head_text);
+    }
+}
+
 static void setup_view(void)
 {
     rows_hidden();
@@ -1417,7 +1429,7 @@ static void setup_view(void)
     show(s_head_back, false);
     show(s_qr, true);
     lbl(s_pageno, "");
-    lbl(s_head, "Wi-Fi setup");
+    head_set("Wi-Fi setup");
     char status[96], text[160];
     setup_status(status, sizeof(status));
     snprintf(text, sizeof(text), "Join %s\n%s", SETUP_SSID, status[0] ? status : "then open any web page");
@@ -1437,11 +1449,17 @@ static void rebuild(void)
     show(s_pad, s_view == VIEW_PAD);
     show(s_cal, s_view == VIEW_CAL);
     show(s_head_back, s_depth > 1 || s_view != VIEW_LIST);
-    lbl(s_pageno, "");
+    // the page number first, so the title is laid out once, at its final width
+    char pageno[24] = "";
+    int pages = s_view == VIEW_LIST && s_count > 0 ? (s_total + ROWS - 1) / ROWS : 0;
+    if (pages > 1) {
+        snprintf(pageno, sizeof(pageno), "%d/%d", lv->page + 1, pages);
+    }
+    lbl(s_pageno, pageno);
     head_fit();
     if (s_view == VIEW_CAL) {
         rows_hidden();
-        lbl(s_head, "Touch test");
+        head_set("Touch test");
         lv_obj_set_pos(s_cal, s_cal_at[s_cal_step % 5][0] - 14, s_cal_at[s_cal_step % 5][1] - 14);
         char text[96];
         snprintf(text, sizeof(text), "Tap the centre of the dot\n%d of 5", s_cal_step + 1);
@@ -1454,10 +1472,10 @@ static void rebuild(void)
         rows_hidden();
         char text[48];
         snprintf(text, sizeof(text), "Channel %s_", s_digits);
-        lbl(s_head, text);
+        head_set(text);
         return;
     }
-    lbl(s_head, s_depth == 1 ? (bridge_name()[0] ? bridge_name() : "channelstv") : lv->title);
+    head_set(s_depth == 1 ? (bridge_name()[0] ? bridge_name() : "channelstv") : lv->title);
     if (bridge_state() != BRIDGE_FOUND && !at_settings()) {
         rows_hidden();
         bridge_note();
@@ -1498,13 +1516,6 @@ static void rebuild(void)
         lv_obj_set_style_bg_color(s_row[i], lv_color_hex(C_PANEL), 0);
         show(s_row[i], true);
     }
-    int pages = (s_total + ROWS - 1) / ROWS;
-    if (pages > 1) {
-        char p[24];
-        snprintf(p, sizeof(p), "%d/%d", lv->page + 1, pages);
-        lbl(s_pageno, p);
-    }
-    head_fit();
 }
 
 // The battery in the heading whenever the ADC gives a reading (the radio firmware's sign of a
@@ -1516,8 +1527,10 @@ static void head_fit(void)
 {
     int right = 26 + (s_batt_shown ? 62 : 0) + (lv_label_get_text(s_pageno)[0] ? 42 : 0);
     int w = LCD_W - 34 - right;
-    if (lv_obj_get_width(s_head) != w) {
+    if (lv_obj_get_style_width(s_head, 0) != w) {
         lv_obj_set_width(s_head, w);
+        lv_obj_update_layout(s_head);           // the new width now, not at the next refresh,
+        lv_label_set_text(s_head, s_head_text); // so the dots are placed for it
     }
 }
 
