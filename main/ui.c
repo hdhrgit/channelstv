@@ -1409,6 +1409,41 @@ static void rows_hidden(void)
 }
 
 // The setup hotspot: its QR code (a phone camera offers to join), what to do, how it's going.
+// A label whose text doesn't fit scrolls it once, slowly, to the end; a moment later it
+// settles back to the start in its usual mode (dots, or cut). One at a time.
+#define SCROLL_PX_S 20
+static lv_timer_t *s_scroll_timer;
+static lv_obj_t *s_scroll_label;
+static lv_label_long_mode_t s_scroll_settle;
+
+static void scroll_settle(lv_timer_t *t)
+{
+    lv_timer_delete(t);
+    s_scroll_timer = NULL;
+    lv_label_set_long_mode(s_scroll_label, s_scroll_settle); // at the start again, dots placed
+}
+
+// text is the label's whole text: in dots mode LVGL has already shortened its own copy.
+static void scroll_once(lv_obj_t *o, const char *text, lv_label_long_mode_t settle)
+{
+    if (s_scroll_timer) {
+        scroll_settle(s_scroll_timer);
+    }
+    lv_obj_update_layout(o);
+    lv_point_t size;
+    lv_text_get_size(&size, text, lv_obj_get_style_text_font(o, 0),
+                     lv_obj_get_style_text_letter_space(o, 0), 0, LV_COORD_MAX, LV_TEXT_FLAG_NONE);
+    int over = size.x - lv_obj_get_content_width(o);
+    if (over <= 0) {
+        return;
+    }
+    lv_obj_set_style_anim_duration(o, lv_anim_speed(SCROLL_PX_S), 0);
+    lv_label_set_long_mode(o, LV_LABEL_LONG_MODE_SCROLL);
+    s_scroll_label = o;
+    s_scroll_settle = settle;
+    s_scroll_timer = lv_timer_create(scroll_settle, over * 1000 / SCROLL_PX_S + 600, NULL);
+}
+
 // The heading's title as given: LVGL shortens it with dots in the label's own text, so that
 // can't be compared or used to redo the dots at another width (head_fit).
 static char s_head_text[112];
@@ -1418,6 +1453,9 @@ static void head_set(const char *text)
     if (strcmp(s_head_text, text) != 0) {
         strlcpy(s_head_text, text, sizeof(s_head_text));
         lv_label_set_text(s_head, s_head_text);
+        if (s_depth == 1 && s_view == VIEW_LIST && !setup_active()) {
+            scroll_once(s_head, s_head_text, LV_LABEL_LONG_MODE_DOTS); // the bridge's name, in full, once
+        }
     }
 }
 
@@ -1531,6 +1569,9 @@ static void head_fit(void)
         lv_obj_set_width(s_head, w);
         lv_obj_update_layout(s_head);           // the new width now, not at the next refresh,
         lv_label_set_text(s_head, s_head_text); // so the dots are placed for it
+        if (s_scroll_timer && s_scroll_label == s_head) {
+            scroll_once(s_head, s_head_text, LV_LABEL_LONG_MODE_DOTS); // measured for the new width
+        }
     }
 }
 
