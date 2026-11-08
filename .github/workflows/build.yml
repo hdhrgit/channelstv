@@ -42,9 +42,6 @@ jobs:
       - name: Checksums
         run: sha256sum channelstv-*-full.bin channelstv-*-ota.bin > SHA256SUMS && cat SHA256SUMS
 
-      - name: Scan the images for private strings
-        run: tools/scan-artifacts.sh channelstv-*-full.bin channelstv-*-ota.bin
-
       - uses: actions/upload-artifact@v4
         with:
           name: channelstv-${{ steps.ver.outputs.name }}

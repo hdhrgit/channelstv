@@ -230,9 +230,7 @@ page: Seeking, by time); with `"bytes"` they play from the start to the end.
 
 Releases are built by GitHub Actions ([`.github/workflows/build.yml`](.github/workflows/build.yml))
 with ESP-IDF v5.4.2. Every push builds, and a `v*` tag publishes a release. The build is
-reproducible (`CONFIG_APP_REPRODUCIBLE_BUILD`): the image carries no build paths or dates, and
-[`tools/scan-artifacts.sh`](tools/scan-artifacts.sh) fails the build if an image contains
-something that looks like an IP address, a LAN host name or an e-mail address.
+reproducible (`CONFIG_APP_REPRODUCIBLE_BUILD`): the image carries no build paths or dates.
 
 To build it yourself, you need [ESP-IDF](https://docs.espressif.com/projects/esp-idf/en/v5.4.2/esp32s3/get-started/)
 5.4. The other components (LVGL, the H.264 decoder and the audio codecs) come from the ESP
