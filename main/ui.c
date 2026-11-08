@@ -100,6 +100,7 @@ static lv_font_t *f14, *f18, *f22, *f28;
 static lv_obj_t *s_head_back, *s_head, *s_pageno, *s_wifi, *s_batt;
 static bool s_batt_shown;
 static lv_obj_t *s_row[ROWS], *s_row_icon[ROWS], *s_row_text[ROWS];
+static lv_obj_t *s_row_cap[ROWS]; // the Version page's names, over their values in s_row_text
 static lv_obj_t *s_row_new[ROWS]; // a dot on a recording nobody has watched (upnp:playbackCount 0)
 static lv_obj_t *s_note;       // a message in place of the rows
 static lv_obj_t *s_pad;        // the number pad's grid
@@ -287,7 +288,9 @@ static void settings_rows(void)
 }
 
 // What Version opens, under the heading "Version x.y.z": the board's address, and the bridge's
-// address, version and how it was found: rows that only show, each a name over its value.
+// address, version, how it was found and its whole name: rows that only show, each a name over
+// its value. A name too long for the row scrolls once when the page opens.
+static bool s_version_opened;
 static void version_rows(void)
 {
     net_t net;
@@ -304,7 +307,10 @@ static void version_rows(void)
         *p = '\0';
     }
     s_count = 0;
-    for (int k = 1; k < 4; k++) { // the version itself is the page's heading
+    for (int k = 1; k < 5; k++) { // the version itself is the page's heading
+        if (k == 4 && !base[0]) {
+            break;
+        }
         cd_entry_t *e = &s_entries[s_count++];
         memset(e, 0, sizeof(*e));
         snprintf(e->id, sizeof(e->id), "#version%d", k);
@@ -318,7 +324,8 @@ static void version_rows(void)
                 strlcpy(e->title, "Bridge\nnone", sizeof(e->title));
             }
             break;
-        default: snprintf(e->title, sizeof(e->title), "Bridge version\n%s", ver[0] ? ver : "unknown"); break;
+        case 3: snprintf(e->title, sizeof(e->title), "Bridge version\n%s", ver[0] ? ver : "unknown"); break;
+        default: snprintf(e->title, sizeof(e->title), "Bridge name\n%s", bridge_name()); break; // in full
         }
     }
     s_total = s_count;
@@ -1307,6 +1314,7 @@ static void activate_row(int i)
         case SET_VERSION: {
             cd_entry_t page = {.id = VERSION_ID, .container = true};
             snprintf(page.title, sizeof(page.title), "Version %s", CHANNELSTV_VERSION);
+            s_version_opened = true;
             open_folder(&page);
             return;
         }
@@ -1615,6 +1623,10 @@ static void rebuild(void)
         note("Nothing here.", C_DIM);
         return;
     }
+    if (s_scroll_timer && s_scroll_label != s_head && !at_version()) {
+        lv_timer_delete(s_scroll_timer); // a row left mid-scroll: the next page sets its own mode
+        s_scroll_timer = NULL;
+    }
     for (int i = 0; i < ROWS; i++) {
         if (i >= s_count) {
             show(s_row[i], false);
@@ -1627,12 +1639,27 @@ static void rebuild(void)
         } else {
             strlcpy(text, e->title, sizeof(text));
         }
-        // the Version page's rows are a name over its value: smaller, on two lines
-        bool two = at_version();
-        lv_obj_set_style_text_font(s_row_text[i], two ? f18 : f22, 0);
-        lv_label_set_long_mode(s_row_text[i], two ? LV_LABEL_LONG_WRAP : LV_LABEL_LONG_DOT);
-        lv_obj_set_height(s_row_text[i], two ? 44 : 28);
-        lbl(s_row_text[i], text);
+        // the Version page's rows are "name\nvalue": the name small on top, the value under it;
+        // the bridge's name is cut rather than dotted, and scrolls once when the page opens
+        bool two = at_version(), name = two && !strcmp(e->id, "#version4");
+        char *value = two ? strchr(text, '\n') : NULL;
+        if (value) {
+            *value++ = '\0';
+            lbl(s_row_cap[i], text);
+        }
+        show(s_row_cap[i], value != NULL);
+        bool scrolling = s_scroll_timer && s_scroll_label == s_row_text[i];
+        lv_obj_set_style_text_font(s_row_text[i], value ? f18 : f22, 0);
+        if (!scrolling) {
+            lv_label_set_long_mode(s_row_text[i], name ? LV_LABEL_LONG_CLIP : LV_LABEL_LONG_DOT);
+        }
+        lv_obj_set_height(s_row_text[i], value ? 22 : 28);
+        lv_obj_align(s_row_text[i], LV_ALIGN_LEFT_MID, 40, value ? 11 : 0);
+        lbl(s_row_text[i], value ? value : text);
+        if (name && value && s_version_opened) {
+            s_version_opened = false;
+            scroll_once(s_row_text[i], value, LV_LABEL_LONG_CLIP);
+        }
         show(s_row_new[i], !at_local() && !e->container && !e->live && e->play_count == 0);
         lbl(s_row_icon[i], at_local() ? LV_SYMBOL_SETTINGS
                            : !strcmp(e->id, SETTINGS_ID) ? LV_SYMBOL_SETTINGS
@@ -1826,6 +1853,11 @@ static void build_screen(lv_obj_t *scr)
         lv_obj_set_size(s_row_text[i], LCD_W - 8 - 46, 28); // one line, cut short with "..."
         lv_label_set_long_mode(s_row_text[i], LV_LABEL_LONG_DOT);
         lv_obj_align(s_row_text[i], LV_ALIGN_LEFT_MID, 40, 0);
+        s_row_cap[i] = label(s_row[i], f18, C_TEXT);
+        lv_obj_set_size(s_row_cap[i], LCD_W - 8 - 46, 22);
+        lv_label_set_long_mode(s_row_cap[i], LV_LABEL_LONG_DOT);
+        lv_obj_align(s_row_cap[i], LV_ALIGN_LEFT_MID, 40, -11);
+        lv_obj_add_flag(s_row_cap[i], LV_OBJ_FLAG_HIDDEN);
         lv_obj_add_flag(s_row[i], LV_OBJ_FLAG_HIDDEN);
     }
     s_note = label(scr, f18, C_DIM);
