@@ -32,3 +32,7 @@ void h264_i420_to_rgb565be(const uint8_t *yuv, int stride, int coded_h, int w, i
 // The same for h rows (even) given each plane's start: py at stride, pu and pv at stride / 2.
 void h264_i420_rows_to_rgb565be(const uint8_t *py, const uint8_t *pu, const uint8_t *pv, int stride, int w, int h,
                                 uint16_t *out);
+// A compact w x h I420 picture (w and h even) turned rot quarter turns, as the panel gets it:
+// its rows [first, first + lines), (rot & 1 ? h : w) wide (board_turn).
+void h264_i420_turned_to_rgb565be(const uint8_t *py, const uint8_t *pu, const uint8_t *pv, int w, int h, int rot,
+                                  int first, int lines, uint16_t *out);

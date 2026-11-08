@@ -531,9 +531,6 @@ bool board_accel(float *x, float *y, float *z)
 
 // ---------------------------------------------------------------- rotation
 
-// The ST7789 turns the picture itself (MADCTL); its memory is 240 x 320, so the two
-// rotations that count from its far end need an 80 line offset (the same offsets as the
-// radio firmware on this board: 80 across at 90 degrees, 80 down at 180).
 void board_rotation_want(int r)
 {
     s_rot_want = r & 3;
@@ -546,19 +543,70 @@ int board_rotation(void)
 
 bool board_rotation_apply(void)
 {
-    static const struct {
-        bool swap, mx, my;
-        int gx, gy;
-    } t[4] = {{false, false, false, 0, 0}, {true, false, true, 80, 0}, {false, true, true, 0, 80}, {true, true, false, 0, 0}};
     int r = s_rot_want;
     if (r == s_rot || !s_panel) {
         return false;
     }
-    esp_lcd_panel_swap_xy(s_panel, t[r].swap);
-    esp_lcd_panel_mirror(s_panel, t[r].mx, t[r].my);
-    esp_lcd_panel_set_gap(s_panel, t[r].gx, t[r].gy);
     s_rot = r;
     return true;
+}
+
+void board_turn_rect(int x, int y, int w, int h, int rot, int *px, int *py)
+{
+    switch (rot & 3) {
+    case 1: *px = y; *py = LCD_W - x - w; break;
+    case 2: *px = LCD_W - x - w; *py = LCD_H - y - h; break;
+    case 3: *px = LCD_H - y - h; *py = x; break;
+    default: *px = x; *py = y; break;
+    }
+}
+
+void board_turn_rows(const uint16_t *src, int w, int h, int rot, int first, int lines, uint16_t *dst)
+{
+    board_turn_t t = board_turn(w, h, rot, first, lines);
+    for (int y = t.y0; y < t.y1; y++) {
+        const uint16_t *s = src + y * w;
+        uint16_t *o = dst + t.k0 + t.ky * y;
+        for (int x = t.x0; x < t.x1; x++) {
+            o[t.kx * x] = s[x];
+        }
+    }
+}
+
+void board_turn_in_place(uint16_t *p, int w, int h, int rot)
+{
+    int n = w * h;
+    rot &= 3;
+    if (rot == 2) {
+        for (int i = 0, j = n - 1; i < j; i++, j--) {
+            uint16_t t = p[i];
+            p[i] = p[j];
+            p[j] = t;
+        }
+        return;
+    }
+    // a quarter turn: each pixel moves along its cycle of the permutation, once
+    static uint32_t done[(LCD_W * 20 + 31) / 32];
+    if (rot == 0 || n > LCD_W * 20) {
+        return;
+    }
+    memset(done, 0, (n + 31) / 32 * 4);
+    for (int s0 = 0; s0 < n; s0++) {
+        if (done[s0 >> 5] & 1u << (s0 & 31)) {
+            continue;
+        }
+        int s = s0;
+        uint16_t v = p[s0];
+        do {
+            int x = s % w, y = s / w;
+            int d = rot == 1 ? (w - 1 - x) * h + y : x * h + h - 1 - y;
+            uint16_t t = p[d];
+            p[d] = v;
+            v = t;
+            done[d >> 5] |= 1u << (d & 31);
+            s = d;
+        } while (s != s0);
+    }
 }
 
 float board_imu_temp(void)

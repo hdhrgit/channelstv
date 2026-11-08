@@ -21,6 +21,7 @@
 #include "freertos/queue.h"
 #include "freertos/task.h"
 #include "lvgl.h"
+#include "src/display/lv_display_private.h"
 #include "nvs.h"
 
 #include "app.h"
@@ -1662,6 +1663,24 @@ static void build_screen(lv_obj_t *scr)
     lv_obj_add_event_cb(s_catch, on_touch, LV_EVENT_RELEASED, NULL);
 }
 
+// The panel keeps its own way up: LVGL draws the screen upright, and each block it hands over
+// is turned in its own buffer, with its area, on the way to the panel.
+static lv_display_flush_cb_t s_port_flush;
+
+static void flush_turned(lv_display_t *d, const lv_area_t *a, uint8_t *px)
+{
+    int rot = board_rotation();
+    if (!rot) {
+        s_port_flush(d, a, px);
+        return;
+    }
+    int w = lv_area_get_width(a), h = lv_area_get_height(a), x, y;
+    board_turn_in_place((uint16_t *)px, w, h, rot);
+    board_turn_rect(a->x1, a->y1, w, h, rot, &x, &y);
+    lv_area_t t = {x, y, x + (rot & 1 ? h : w) - 1, y + (rot & 1 ? w : h) - 1};
+    s_port_flush(d, &t, px);
+}
+
 void ui_start(void)
 {
     s_requests = xQueueCreate(4, sizeof(request_t));
@@ -1683,6 +1702,8 @@ void ui_start(void)
         .flags = {.buff_dma = true, .swap_bytes = true},
     };
     lv_display_t *d = lvgl_port_add_disp(&disp);
+    s_port_flush = d->flush_cb;
+    lv_display_set_flush_cb(d, flush_turned);
     if (board_touch()) {
         lvgl_port_touch_cfg_t touch = {.disp = d, .handle = board_touch()};
         lvgl_port_add_touch(&touch);

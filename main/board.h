@@ -69,9 +69,35 @@ bool board_accel(float *x, float *y, float *z);
 // turned with it. board_rotation_want() asks for one;
 // board_rotation_apply() makes it, from whoever draws on the panel at the time (the LVGL task,
 // or playback's draw task); true if it changed, and the whole screen needs drawing again.
+// The panel itself keeps its own way up, so what is sent to it always runs along its scan:
+// pictures are turned in software on their way to it (board_turn and the functions below).
 void board_rotation_want(int r);
 int board_rotation(void);
 bool board_rotation_apply(void);
+
+// How a w x h picture (w and h even) turned rot quarter turns lands on the panel: the panel
+// block is (rot & 1 ? h : w) wide, and of its rows [first, first + lines) the source pixel
+// (x, y) goes to index k0 + kx * x + ky * y, for x in [x0, x1) and y in [y0, y1).
+typedef struct {
+    int kx, ky, k0, x0, x1, y0, y1;
+} board_turn_t;
+
+static inline board_turn_t board_turn(int w, int h, int rot, int first, int lines)
+{
+    switch (rot & 3) {
+    case 1: return (board_turn_t){-h, 1, (w - 1 - first) * h, w - first - lines, w - first, 0, h};
+    case 2: return (board_turn_t){-1, -w, (h - 1 - first) * w + w - 1, 0, w, h - first - lines, h - first};
+    case 3: return (board_turn_t){h, -1, -first * h + h - 1, first, first + lines, 0, h};
+    default: return (board_turn_t){1, w, -first * w, 0, w, first, first + lines};
+    }
+}
+
+// The panel position of a screen rectangle (x, y, w x h) when the screen is turned rot.
+void board_turn_rect(int x, int y, int w, int h, int rot, int *px, int *py);
+// Rows [first, first + lines) of a w x h RGB565 image turned rot, into dst.
+void board_turn_rows(const uint16_t *src, int w, int h, int rot, int first, int lines, uint16_t *dst);
+// A w x h RGB565 block turned rot in place (w * h at most LCD_W * 20).
+void board_turn_in_place(uint16_t *p, int w, int h, int rot);
 // The panel's gamma curve: 1.0, 1.8, 2.2 (the power-on default) or 2.5; the nearest is used.
 // Call with the LVGL lock held, so it doesn't land in the middle of a frame.
 bool board_panel_gamma(float gamma);

@@ -2,6 +2,7 @@
 // colour conversion is table driven, since the straightforward version cost ~12 ms a frame.
 
 #include "h264dec.h"
+#include "board.h"
 
 #include <stdlib.h>
 #include <string.h>
@@ -102,6 +103,29 @@ void h264_i420_rows_to_rgb565be(const uint8_t *py, const uint8_t *pu, const uint
                 c = s_y[y1[x + 1]];
                 o1[x + 1] = s_r[c + r] | s_g[c + g] | s_b[c + b];
             }
+        }
+    }
+}
+
+void h264_i420_turned_to_rgb565be(const uint8_t *py, const uint8_t *pu, const uint8_t *pv, int w, int h, int rot,
+                                  int first, int lines, uint16_t *out)
+{
+    board_turn_t t = board_turn(w, h, rot, first, lines);
+    for (int y = t.y0; y < t.y1; y += 2) {
+        const uint8_t *y0 = py + y * w, *y1 = y0 + w;
+        const uint8_t *u = pu + (y / 2) * (w / 2), *v = pv + (y / 2) * (w / 2);
+        uint16_t *o = out + t.k0 + t.ky * y;
+        for (int x = t.x0; x < t.x1; x += 2) {
+            int r = s_rv[v[x / 2]] + CLAMP_OFF, g = s_gu[u[x / 2]] + s_gv[v[x / 2]] + CLAMP_OFF, b = s_bu[u[x / 2]] + CLAMP_OFF;
+            uint16_t *p = o + t.kx * x;
+            int c = s_y[y0[x]];
+            p[0] = s_r[c + r] | s_g[c + g] | s_b[c + b];
+            c = s_y[y0[x + 1]];
+            p[t.kx] = s_r[c + r] | s_g[c + g] | s_b[c + b];
+            c = s_y[y1[x]];
+            p[t.ky] = s_r[c + r] | s_g[c + g] | s_b[c + b];
+            c = s_y[y1[x + 1]];
+            p[t.kx + t.ky] = s_r[c + r] | s_g[c + g] | s_b[c + b];
         }
     }
 }

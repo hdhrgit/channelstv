@@ -158,25 +158,33 @@ static char s_draw_err[64];
 // Converts an I420 frame (compact, Y stride w) strip by strip into the panel's RGB565 and
 // sends it, centred. The conversion runs here on core 1, not in the decoder on core 0: at
 // 240x192 decoding alone takes most of a frame's time.
-static void draw_frame(esp_lcd_panel_handle_t panel, uint16_t *strip[2], const uint8_t *frame, int w, int h)
+// Turned with the board (rot), it still goes out in the panel's own row order.
+static void draw_frame(esp_lcd_panel_handle_t panel, uint16_t *strip[2], const uint8_t *frame, int w, int h, int rot)
 {
-    int x = (LCD_W - w) / 2, y = (LCD_H - h) / 2;
+    int pw = rot & 1 ? h : w, ph = rot & 1 ? w : h;
+    int x = (LCD_W - pw) / 2, y = (LCD_H - ph) / 2;
     const uint8_t *pu = frame + w * h, *pv = pu + (w / 2) * (h / 2);
-    for (int row = 0, s = 0; row < h; row += STRIP_LINES, s ^= 1) { // STRIP_LINES is even
-        int lines = h - row < STRIP_LINES ? h - row : STRIP_LINES;
-        h264_i420_rows_to_rgb565be(frame + row * w, pu + row / 2 * (w / 2), pv + row / 2 * (w / 2), w, w, lines, strip[s]);
-        esp_err_t err = esp_lcd_panel_draw_bitmap(panel, x, y + row, x + w, y + row + lines, strip[s]);
+    for (int row = 0, s = 0; row < ph; row += STRIP_LINES, s ^= 1) { // STRIP_LINES is even
+        int lines = ph - row < STRIP_LINES ? ph - row : STRIP_LINES;
+        if (rot) {
+            h264_i420_turned_to_rgb565be(frame, pu, pv, w, h, rot, row, lines, strip[s]);
+        } else {
+            h264_i420_rows_to_rgb565be(frame + row * w, pu + row / 2 * (w / 2), pv + row / 2 * (w / 2), w, w, lines,
+                                       strip[s]);
+        }
+        esp_err_t err = esp_lcd_panel_draw_bitmap(panel, x, y + row, x + pw, y + row + lines, strip[s]);
         if (err != ESP_OK && !s_draw_err[0]) {
             snprintf(s_draw_err, sizeof(s_draw_err), "draw row %d: %s", row, esp_err_to_name(err));
         }
     }
 }
 
-// A full-screen RGB565 image (panel byte order, in PSRAM) through the internal-RAM strips.
-static void draw_rgb(esp_lcd_panel_handle_t panel, uint16_t *strip[2], const uint16_t *img)
+// A full-screen RGB565 image (panel byte order, in PSRAM) through the internal-RAM strips,
+// turned rot.
+static void draw_rgb(esp_lcd_panel_handle_t panel, uint16_t *strip[2], const uint16_t *img, int rot)
 {
     for (int y = 0, k = 0; y < LCD_H; y += STRIP_LINES, k ^= 1) {
-        memcpy(strip[k], img + y * LCD_W, LCD_W * STRIP_LINES * 2);
+        board_turn_rows(img, LCD_W, LCD_H, rot, y, STRIP_LINES, strip[k]);
         esp_lcd_panel_draw_bitmap(panel, 0, y, LCD_W, y + STRIP_LINES, strip[k]);
     }
 }
@@ -263,14 +271,17 @@ static void draw_task(void *arg)
             }
             if (banner_dma) {
                 banner_on = s_banner_want;
+                int rot = board_rotation();
                 if (banner_on) {
-                    memcpy(banner_dma, s_banner, LCD_W * BANNER_H * 2);
+                    board_turn_rows(s_banner, LCD_W, BANNER_H, rot, 0, rot & 1 ? LCD_W : BANNER_H, banner_dma);
                 } else {
                     memset(banner_dma, 0, LCD_W * BANNER_H * 2);
                 }
                 // in the bar under the picture
-                int y = (LCD_H + s_pic_h) / 2 + ((LCD_H - s_pic_h) / 2 - BANNER_H) / 2;
-                esp_lcd_panel_draw_bitmap(panel, 0, y, LCD_W, y + BANNER_H, banner_dma);
+                int y = (LCD_H + s_pic_h) / 2 + ((LCD_H - s_pic_h) / 2 - BANNER_H) / 2, px, py;
+                board_turn_rect(0, y, LCD_W, BANNER_H, rot, &px, &py);
+                int pw = rot & 1 ? BANNER_H : LCD_W, ph = rot & 1 ? LCD_W : BANNER_H;
+                esp_lcd_panel_draw_bitmap(panel, px, py, px + pw, py + ph, banner_dma);
                 banner_age = 0;
             }
         } else if (banner_dma && !banner_on && ++banner_age > 2) {
@@ -283,7 +294,7 @@ static void draw_task(void *arg)
             overlay_on = ov != NULL;
             s_drstate = "overlay";
             if (ov) {
-                draw_rgb(panel, s_strip, ov);
+                draw_rgb(panel, s_strip, ov, board_rotation());
             } else {
                 memset(s_strip[0], 0, LCD_W * STRIP_LINES * 2); // black around the picture again
                 for (int y = 0; y < LCD_H; y += STRIP_LINES) {
@@ -308,7 +319,7 @@ static void draw_task(void *arg)
             int64_t a = esp_timer_get_time();
             s_drstate = "drawing";
             if (!overlay_on) {
-                draw_frame(panel, s_strip, s_fb[fr.buf], fr.w, fr.h);
+                draw_frame(panel, s_strip, s_fb[fr.buf], fr.w, fr.h, board_rotation());
             }
             int64_t b = esp_timer_get_time();
             draw_us += b - a;
