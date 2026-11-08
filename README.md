@@ -201,14 +201,18 @@ the DVR's original stream, which the board can't decode. For the centre 4:3 of t
 (Picture in Settings or on the web page) it adds the bridge's overrides
 `w=240&h=192&fit=crop43` to the stream URLs, which needs dlna-bridge v0.99.10 or later.
 
+Newer bridges have the `esp32` profile built in, so there is nothing to add; a client named
+`esp32` in the bridge's settings still takes its place, for tuning. On older ones, add it as
+below.
+
 The board checks the profile whenever it finds the bridge: it reads the bridge's `/api/state` (it
-never writes to the bridge) and wants the client to transcode to H.264 `baseline`, one slice a
-frame (`single_slice`), at most 240 pixels wide. If it is missing or different, the board
-doesn't play. The screen says "Bridge needs the esp32 profile, see README" with the
+never writes to the bridge), takes the `esp32` client from its settings or else the built-in
+one, and wants it to transcode to H.264 `baseline`, one slice a frame (`single_slice`), at most
+240 pixels wide. If it is missing or different, the board doesn't play. The screen says "Bridge needs the esp32 profile, see README" with the
 reason, and so do the web page and `/api/status` (`bridge.profile_problem`). A stream that still
 won't decode ends with the same message.
 
-Add the client on the bridge's settings page, or with `curl` and
+On a bridge without the built-in profile, add the client on its settings page, or with `curl` and
 [`jq`](https://jqlang.org/). `PUT /api/config` takes the whole configuration, so this reads the
 current one from `/api/state`, puts the client in (replacing any with the same name) and
 sends it back:

@@ -267,7 +267,7 @@ static void use(const device_t *dev, const char *by)
 // ---------------------------------------------------------------- the bridge's client profile
 
 // What a client profile must be for the board to decode its streams; "" if it is.
-static void profile_problem(const cJSON *clients, const char *name, char *out, size_t len)
+static const cJSON *client_named(const cJSON *clients, const char *name)
 {
     const cJSON *c, *found = NULL;
     cJSON_ArrayForEach(c, clients) {
@@ -276,6 +276,12 @@ static void profile_problem(const cJSON *clients, const char *name, char *out, s
             found = c;
         }
     }
+    return found;
+}
+
+// found: the client the bridge uses for name (NULL if none).
+static void profile_problem(const cJSON *found, const char *name, char *out, size_t len)
+{
     const cJSON *p = cJSON_GetObjectItem(found, "profile");
     const cJSON *mode = cJSON_GetObjectItem(p, "mode"), *t = cJSON_GetObjectItem(p, "transcode");
     const cJSON *h264 = cJSON_GetObjectItem(t, "h264_profile"), *w = cJSON_GetObjectItem(t, "max_width");
@@ -294,22 +300,25 @@ static void profile_problem(const cJSON *clients, const char *name, char *out, s
     }
 }
 
-// Reads the client profile from the bridge's /api/state (the board never writes to it). If
-// the state can't be read or has no config, nothing is held against the profile.
+// Reads the client profile from the bridge's /api/state (the board never writes to it): one in
+// its config if there is one, which the bridge uses first, else the one built into the bridge.
+// If the state can't be read, nothing is held against the profile.
 static void check_profiles(const char *base, char *buf)
 {
     char url[128], problem[96] = "";
     snprintf(url, sizeof(url), "%s/api/state", base);
     cJSON *root = http_get(url, buf, DESC_MAX, 4000) > 0 ? cJSON_Parse(buf) : NULL;
     const cJSON *clients = cJSON_GetObjectItem(cJSON_GetObjectItem(root, "config"), "clients");
+    const cJSON *builtin = cJSON_GetObjectItem(root, "builtin");
     const cJSON *ver = cJSON_GetObjectItem(root, "version");
     if (cJSON_IsString(ver)) {
         xSemaphoreTake(s_lock, portMAX_DELAY);
         strlcpy(s_bversion, ver->valuestring, sizeof(s_bversion));
         xSemaphoreGive(s_lock);
     }
-    if (cJSON_IsArray(clients)) {
-        profile_problem(clients, PROFILE, problem, sizeof(problem));
+    if (root && cJSON_GetObjectItem(root, "config")) {
+        const cJSON *found = client_named(clients, PROFILE);
+        profile_problem(found ? found : client_named(builtin, PROFILE), PROFILE, problem, sizeof(problem));
     } else {
         ESP_LOGW(TAG, "can't read the bridge's client profiles");
     }

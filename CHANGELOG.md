@@ -23,6 +23,8 @@
   `/api/status` the bridge's.
 - The heading's title no longer runs into the page number, and the bridge's name scrolls once,
   slowly, when the top menu appears.
+- The board accepts the `esp32` profile built into newer bridges when the bridge's settings have
+  no `esp32` client of their own.
 - Needs: dlna-bridge v0.99.10 or later, for the 4:3 picture.
 
 ## v0.3.0 (2026-11-07)
