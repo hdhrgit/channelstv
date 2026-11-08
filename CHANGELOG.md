@@ -7,6 +7,7 @@
   can go.
 - `/api/settings` takes `picture=16x9|4x3` instead of `profile=`; `/api/status` says
   `bridge.picture` and no longer `bridge.profiles`. The 4:3 choice starts over at 16:9.
+- The screen refreshes at 48 Hz, twice the video's 24 fps.
 - Needs: dlna-bridge v0.99.10 or later, for the 4:3 picture.
 
 ## v0.3.0 (2026-11-07)

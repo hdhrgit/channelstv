@@ -309,6 +309,8 @@ static void lcd_init(void)
     esp_lcd_panel_reset(s_panel);
     esp_lcd_panel_init(s_panel);
     esp_lcd_panel_invert_color(s_panel, true);
+    // FRCTRL2: 48 Hz instead of 60, twice the video's 24 fps (with the default porch)
+    esp_lcd_panel_io_tx_param(s_lcd_io, 0xc6, (uint8_t[]){0x17}, 1);
     esp_lcd_panel_disp_on_off(s_panel, true);
 
     esp_lcd_panel_io_handle_t tp_io;
