@@ -1644,8 +1644,14 @@ static void refresh(lv_timer_t *timer)
     }
     was_on_battery = on_battery;
     int64_t inactive = lv_display_get_inactive_time(NULL);
-    bool off = on_battery && s_off_min && inactive > s_off_min * 60000LL;
-    bool dim = off || (on_battery && s_dim_s && inactive > s_dim_s * 1000LL);
+    bool off = s_off_min && inactive > s_off_min * 60000LL;
+    bool dim = off || (s_dim_s && inactive > s_dim_s * 1000LL);
+    if (!on_battery) {
+        // the timers don't run on USB, and plugging in doesn't wake the screen: a dim or dark
+        // one stays so until a touch or key
+        off = off && s_screen_off;
+        dim = dim && s_dimmed;
+    }
     if (dim != s_dimmed || off != s_screen_off) {
         s_dimmed = dim;
         s_screen_off = off;
