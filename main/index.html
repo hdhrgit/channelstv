@@ -73,8 +73,13 @@
   </select>
   <label for="dim">Dim on battery after</label>
   <select id="dim">
+    <option value="30s">30 s</option><option value="1">1 min</option><option value="5">5 min</option>
+    <option value="10">10 min</option><option value="never">never</option>
+  </select>
+  <label for="off">Screen off on battery after</label>
+  <select id="off">
     <option value="1">1 min</option><option value="5">5 min</option><option value="10">10 min</option>
-    <option value="never">never</option>
+    <option value="30">30 min</option><option value="never">never</option>
   </select>
   <label for="volume">Volume <span id="volv"></span></label>
   <input id="volume" type="range" min="0" max="100">
@@ -129,7 +134,7 @@ async function refresh() {
       $('volume').value = s.volume;
       $('volv').textContent = s.volume + '%';
       fetch('/api/rotation').then(r => r.json()).then(r => $('rotation').value = String(r.setting)).catch(() => {});
-      fetch('/api/settings').then(r => r.json()).then(r => { $('brightness').value = String(r.brightness); $('dim').value = String(r.dim); }).catch(() => {});
+      fetch('/api/settings').then(r => r.json()).then(r => { $('brightness').value = String(r.brightness); $('dim').value = String(r.dim); $('off').value = String(r.off); }).catch(() => {});
     }
   } catch (e) {
     $('status').innerHTML = '<dt>Status</dt><dd class="bad">the board doesn\'t answer</dd>';
@@ -138,7 +143,7 @@ async function refresh() {
 
 $('volume').oninput = () => $('volv').textContent = $('volume').value + '%';
 $('save').onclick = async () => {
-  const q = new URLSearchParams({bridge: $('bridge').value.trim(), picture: $('picture').value, volume: $('volume').value, brightness: $('brightness').value, dim: $('dim').value});
+  const q = new URLSearchParams({bridge: $('bridge').value.trim(), picture: $('picture').value, volume: $('volume').value, brightness: $('brightness').value, dim: $('dim').value, off: $('off').value});
   await fetch('/api/settings?' + q);
   await fetch('/api/rotation?set=' + $('rotation').value);
   setTimeout(refresh, 500);

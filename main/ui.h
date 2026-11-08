@@ -18,10 +18,12 @@ void ui_backlight_full(void);
 // The backlight's level in percent (20..100, saved), for the menus and playback alike.
 int ui_brightness(void);
 void ui_set_brightness(int percent);
-// On battery, minutes untouched before the screen dims (1, 5 or 10; 0 never), saved; it goes
-// dark a few minutes after that.
-int ui_dim_minutes(void);
-void ui_set_dim_minutes(int minutes);
+// On battery, how long untouched before the screen dims (30, 60, 300 or 600 s) and before it
+// goes dark (1, 5, 10 or 30 min); 0 never. Saved.
+int ui_dim_seconds(void);
+void ui_set_dim_seconds(int seconds);
+int ui_off_minutes(void);
+void ui_set_off_minutes(int minutes);
 // The power-off countdown while PWR is held: held_ms of 3000 shows "Powering off",
 // 0 hides it. Safe from any task.
 void ui_power_hold(int held_ms);

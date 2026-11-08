@@ -6,8 +6,9 @@
   the voltage reads high, so it maps through a charging curve: the level only rises and stays
   at 99 % until charging ends.
 - Unplugging no longer turns the screen off at once: the dim timer starts when USB power goes.
-- Settings: Backlight (20 to 100 %, default 80) and Dim on battery (1, 5 or 10 min, or
-  never), also on the web page and in `/api/settings` (`brightness=`, `dim=`).
+- Settings: Backlight (20 to 100 %, default 80), and on battery Dim (30 s, 1, 5 or 10 min, or
+  never; default 1 min) and Off (1, 5, 10 or 30 min, or never; default 5 min), also on the web
+  page and in `/api/settings` (`brightness=`, `dim=`, `off=`).
 
 ## v0.4.0 (2026-11-08)
 

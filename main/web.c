@@ -195,17 +195,28 @@ static esp_err_t settings(httpd_req_t *req)
         ui_set_brightness(bright);
     }
     if (query_str(req, "dim", v, sizeof(v))) {
-        ui_set_dim_minutes(!strcmp(v, "never") ? 0 : atoi(v));
+        // "30s", or minutes
+        ui_set_dim_seconds(!strcmp(v, "never") ? 0 : strchr(v, 's') ? atoi(v) : atoi(v) * 60);
+    }
+    if (query_str(req, "off", v, sizeof(v))) {
+        ui_set_off_minutes(!strcmp(v, "never") ? 0 : atoi(v));
     }
     cJSON *root = cJSON_CreateObject();
     cJSON_AddStringToObject(root, "bridge", bridge_override());
     cJSON_AddStringToObject(root, "picture", bridge_picture());
     cJSON_AddNumberToObject(root, "volume", app_volume());
     cJSON_AddNumberToObject(root, "brightness", ui_brightness());
-    if (ui_dim_minutes()) {
-        cJSON_AddNumberToObject(root, "dim", ui_dim_minutes());
-    } else {
+    if (!ui_dim_seconds()) {
         cJSON_AddStringToObject(root, "dim", "never");
+    } else if (ui_dim_seconds() < 60) {
+        cJSON_AddStringToObject(root, "dim", "30s");
+    } else {
+        cJSON_AddNumberToObject(root, "dim", ui_dim_seconds() / 60);
+    }
+    if (ui_off_minutes()) {
+        cJSON_AddNumberToObject(root, "off", ui_off_minutes());
+    } else {
+        cJSON_AddStringToObject(root, "off", "never");
     }
     return send_json(req, root);
 }

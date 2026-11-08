@@ -42,10 +42,9 @@
 #define C_BAD    0xef5350
 
 #define BL_DIM       10
-// The backlight's level (Settings, saved), and on battery how many minutes untouched before
-// the screen dims (0: never); it goes dark DARK_AFTER_MIN minutes after that.
-static int s_bright = 80, s_dim_min = 1;
-#define DARK_AFTER_MIN 4
+// The backlight's level (Settings, saved), and on battery how long untouched before the screen
+// dims (seconds) and goes dark (minutes); 0: never.
+static int s_bright = 80, s_dim_s = 60, s_off_min = 5;
 
 #define HEAD_H   32
 #define ROWS     4                          // rows a page
@@ -227,12 +226,12 @@ static bool at_settings(void)
     return !strcmp(s_stack[s_depth - 1].id, SETTINGS_ID);
 }
 
-enum { SET_TOUCH, SET_PICTURE, SET_ROTATION, SET_BRIGHT, SET_DIM, SET_OTA, SET_WEB, SET_FIND, SET_ABOUT, SET_N };
+enum { SET_TOUCH, SET_PICTURE, SET_ROTATION, SET_BRIGHT, SET_DIM, SET_OFF, SET_OTA, SET_WEB, SET_FIND, SET_ABOUT, SET_N };
 
 // Settings, a page at a time like any folder.
 static void settings_rows(void)
 {
-    static const char *const titles[SET_N] = {"Touch test", "Picture", "Rotation", "Backlight", "Dim",
+    static const char *const titles[SET_N] = {"Touch test", "Picture", "Rotation", "Backlight", "Dim", "Off",
                                               "OTA updates", "Web control", "Find the bridge again", "About"};
     static const char *const web[] = {"full", "read-only", "off"};
     static const char *const rotations[] = {"auto", "0\u00b0", "90\u00b0", "180\u00b0", "270\u00b0"};
@@ -252,11 +251,19 @@ static void settings_rows(void)
             snprintf(e->title, sizeof(e->title), "Rotation: %s", rotations[rotate_setting() + 1]);
         } else if (k == SET_BRIGHT) {
             snprintf(e->title, sizeof(e->title), "Backlight: %d%%", s_bright);
-        } else if (k == SET_DIM) {
-            if (s_dim_min) {
-                snprintf(e->title, sizeof(e->title), "Dim: %d min", s_dim_min); // on battery
-            } else {
+        } else if (k == SET_DIM) { // on battery
+            if (!s_dim_s) {
                 strlcpy(e->title, "Dim: never", sizeof(e->title));
+            } else if (s_dim_s < 60) {
+                snprintf(e->title, sizeof(e->title), "Dim: %d s", s_dim_s);
+            } else {
+                snprintf(e->title, sizeof(e->title), "Dim: %d min", s_dim_s / 60);
+            }
+        } else if (k == SET_OFF) {
+            if (s_off_min) {
+                snprintf(e->title, sizeof(e->title), "Off: %d min", s_off_min); // on battery
+            } else {
+                strlcpy(e->title, "Off: never", sizeof(e->title));
             }
         } else {
             strlcpy(e->title, titles[k], sizeof(e->title));
@@ -1054,8 +1061,11 @@ static void display_load(void)
         if (nvs_get_i32(h, "bright", &v) == ESP_OK && v >= 20 && v <= 100) {
             s_bright = v;
         }
-        if (nvs_get_i32(h, "dim", &v) == ESP_OK && v >= 0 && v <= 10) {
-            s_dim_min = v;
+        if (nvs_get_i32(h, "dim", &v) == ESP_OK && v >= 0 && v <= 600) {
+            s_dim_s = v > 0 && v <= 10 ? v * 60 : v; // saved in minutes before the 30 s choice
+        }
+        if (nvs_get_i32(h, "off", &v) == ESP_OK && v >= 0 && v <= 30) {
+            s_off_min = v;
         }
         nvs_close(h);
     }
@@ -1086,15 +1096,26 @@ void ui_set_brightness(int percent)
     }
 }
 
-int ui_dim_minutes(void)
+int ui_dim_seconds(void)
 {
-    return s_dim_min;
+    return s_dim_s;
 }
 
-void ui_set_dim_minutes(int minutes)
+void ui_set_dim_seconds(int seconds)
 {
-    s_dim_min = minutes <= 0 ? 0 : minutes < 5 ? 1 : minutes < 10 ? 5 : 10;
-    display_save("dim", s_dim_min);
+    s_dim_s = seconds <= 0 ? 0 : seconds < 60 ? 30 : seconds < 300 ? 60 : seconds < 600 ? 300 : 600;
+    display_save("dim", s_dim_s);
+}
+
+int ui_off_minutes(void)
+{
+    return s_off_min;
+}
+
+void ui_set_off_minutes(int minutes)
+{
+    s_off_min = minutes <= 0 ? 0 : minutes < 5 ? 1 : minutes < 10 ? 5 : minutes < 30 ? 10 : 30;
+    display_save("off", s_off_min);
 }
 
 static void cal_load(void)
@@ -1198,8 +1219,12 @@ static void activate_row(int i)
             ui_set_brightness(s_bright >= 100 ? 20 : (s_bright / 20 + 1) * 20);
             settings_rows();
             break;
-        case SET_DIM: // 1, 5, 10 min, never, 1, ...
-            ui_set_dim_minutes(s_dim_min == 1 ? 5 : s_dim_min == 5 ? 10 : s_dim_min == 10 ? 0 : 1);
+        case SET_DIM: // 30 s, 1, 5, 10 min, never, 30 s, ...
+            ui_set_dim_seconds(s_dim_s == 30 ? 60 : s_dim_s == 60 ? 300 : s_dim_s == 300 ? 600 : s_dim_s == 600 ? 0 : 30);
+            settings_rows();
+            break;
+        case SET_OFF: // 1, 5, 10, 30 min, never, 1, ...
+            ui_set_off_minutes(s_off_min == 1 ? 5 : s_off_min == 5 ? 10 : s_off_min == 10 ? 30 : s_off_min == 30 ? 0 : 1);
             settings_rows();
             break;
         case SET_OTA:
@@ -1610,7 +1635,7 @@ static void refresh(lv_timer_t *timer)
         board_battery(&s_bat);
         s_bat_at = now;
     }
-    // on battery, dim after s_dim_min and go dark a few minutes later; any touch or key brings it back.
+    // on battery, dim after s_dim_s and go dark after s_off_min; any touch or key brings it back.
     // They count from unplugging, not from the last touch while on USB.
     static bool was_on_battery;
     bool on_battery = !s_bat.usb;
@@ -1619,9 +1644,8 @@ static void refresh(lv_timer_t *timer)
     }
     was_on_battery = on_battery;
     int64_t inactive = lv_display_get_inactive_time(NULL);
-    int64_t dim_ms = s_dim_min * 60000LL;
-    bool dim = on_battery && s_dim_min && inactive > dim_ms;
-    bool off = dim && inactive > dim_ms + DARK_AFTER_MIN * 60000LL;
+    bool off = on_battery && s_off_min && inactive > s_off_min * 60000LL;
+    bool dim = off || (on_battery && s_dim_s && inactive > s_dim_s * 1000LL);
     if (dim != s_dimmed || off != s_screen_off) {
         s_dimmed = dim;
         s_screen_off = off;
