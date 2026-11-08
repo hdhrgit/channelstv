@@ -1,12 +1,13 @@
 # Changelog
 
-## Unreleased
+## v0.4.0 (2026-11-08)
 
-- The centre 4:3 picture comes from the `esp32` profile with the bridge's overrides
-  (`w=240&h=192&fit=crop43`); the bridge needs only the one client, and the `esp32_4x3` one can go.
+- The centre 4:3 picture comes from the `esp32` profile with the bridge's stream overrides
+  (`w=240&h=192&fit=crop43`); the bridge needs only the `esp32` client, and the `esp32_4x3` one
+  can go.
 - `/api/settings` takes `picture=16x9|4x3` instead of `profile=`; `/api/status` says
   `bridge.picture` and no longer `bridge.profiles`. The 4:3 choice starts over at 16:9.
-- Needs: a bridge that takes the stream overrides, for the 4:3 picture.
+- Needs: dlna-bridge v0.99.10 or later, for the 4:3 picture.
 
 ## v0.3.0 (2026-11-07)
 

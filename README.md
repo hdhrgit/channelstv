@@ -195,7 +195,7 @@ The board asks for the client profile `esp32` (16:9, 240x144). It adds `?profile
 requests and sends the User-Agent `channelstv/<version>`. Without this client the bridge sends
 the DVR's original stream, which the board can't decode. For the centre 4:3 of the picture
 (Picture in Settings or on the web page) it adds the bridge's overrides
-`w=240&h=192&fit=crop43` to the stream URLs, so it needs a bridge that takes them.
+`w=240&h=192&fit=crop43` to the stream URLs, which needs dlna-bridge v0.99.10 or later.
 
 The board checks the profile whenever it finds the bridge: it reads the bridge's `/api/state` (it
 never writes to the bridge) and wants the client to transcode to H.264 `baseline`, one slice a
