@@ -46,21 +46,24 @@
 // dims (seconds) and goes dark (minutes); 0: never.
 static int s_bright = 80, s_dim_s = 60, s_off_min = 5;
 
-#define HEAD_H   32
+// Sizes are laid out for the 1.54's 240 px wide panel; PX() scales them to this panel's width,
+// so a bigger, denser panel shows the same layout at about the same size on the glass.
+#define PX(v)    ((v) * LCD_W / 240)
+#define HEAD_H   PX(32)
 #define ROWS     4                          // rows a page
-#define ROW_H    ((LCD_H - HEAD_H) / ROWS)  // 52
-#define BACK_W   60                         // the heading's left end goes back
+#define ROW_H    ((LCD_H - HEAD_H) / ROWS)  // 52 on the 1.54
+#define BACK_W   PX(60)                     // the heading's left end goes back
 #define DEPTH    8                          // folders deep
-#define SWIPE_PX 40
+#define SWIPE_PX PX(40)
 #define SWIPE_MS 600
-#define TAP_PX   20
+#define TAP_PX   PX(20)
 #define OVERLAY_MS 4000                     // the playback controls hide after this
 #define SEEK_STEP_S  30                     // a tap on the seek keys ...
 #define SEEK_IDLE_MS 800                    // ... applied once the taps stop for this long
 #define RESUME_MIN_S 30                     // a recording resumes from where it was left, unless
 #define RESUME_END_S 60                     // that's in its first or last this many seconds
 #define RESUME_EVERY_US 15000000LL          // where it is, saved this often while it plays
-#define QR_PX    116                        // the setup hotspot's QR code, quiet zone not included
+#define QR_PX    PX(116)                    // the setup hotspot's QR code, quiet zone not included
 #define SETTINGS_ID "#settings"
 #define VERSION_ID  "#version"
 #define NVS_NS   "channelstv"
@@ -146,7 +149,14 @@ static int s_pressed_row = -1;
 static char s_digits[12]; // typed on the number pad
 static int s_cal_step;
 static int s_cal_raw[5][2];
-static const int s_cal_at[5][2] = {{30, 30}, {210, 30}, {210, 210}, {30, 210}, {120, 120}};
+static const int s_cal_at[5][2] = {{30, 30}, {210, 30}, {210, 210}, {30, 210}, {120, 120}}; // on 240 x 240
+
+// Where touch-test dot i is on this panel: the same places, stretched to its size.
+static void cal_at(int i, int *x, int *y)
+{
+    *x = s_cal_at[i][0] * LCD_W / 240;
+    *y = s_cal_at[i][1] * LCD_H / 240;
+}
 
 static bool s_dimmed, s_screen_off;
 static bool s_api_touch; // the gesture under way came from /api/touch, not a finger
@@ -156,6 +166,13 @@ static int64_t s_bat_at;
 static void rebuild(void);
 static void head_fit(void);
 
+// Montserrat (LVGL's symbols) in the size nearest v px scaled: 14, 20 or 28 are built in
+static const lv_font_t *sym(int v)
+{
+    int px = PX(v);
+    return px >= 26 ? &lv_font_montserrat_28 : px >= 18 ? &lv_font_montserrat_20 : &lv_font_montserrat_14;
+}
+
 static lv_font_t *ttf(int size)
 {
     lv_font_t *f = lv_tiny_ttf_create_data(ttf_start, ttf_end - ttf_start, size);
@@ -163,7 +180,7 @@ static lv_font_t *ttf(int size)
         return (lv_font_t *)&lv_font_montserrat_14;
     }
     // LVGL's symbols (wifi, folder, play) live in the built-in Montserrat fonts
-    f->fallback = size >= 20 ? &lv_font_montserrat_20 : &lv_font_montserrat_14;
+    f->fallback = size >= 26 ? &lv_font_montserrat_28 : size >= 20 ? &lv_font_montserrat_20 : &lv_font_montserrat_14;
     return f;
 }
 
@@ -184,7 +201,7 @@ static lv_obj_t *box(lv_obj_t *parent, int x, int y, int w, int h, uint32_t bg)
     lv_obj_set_size(b, w, h);
     lv_obj_set_style_bg_color(b, lv_color_hex(bg), 0);
     lv_obj_set_style_bg_opa(b, LV_OPA_COVER, 0);
-    lv_obj_set_style_radius(b, 8, 0);
+    lv_obj_set_style_radius(b, PX(8), 0);
     lv_obj_remove_flag(b, LV_OBJ_FLAG_CLICKABLE | LV_OBJ_FLAG_SCROLLABLE);
     return b;
 }
@@ -215,7 +232,7 @@ static void show(lv_obj_t *o, bool on)
 static void toast(const char *text, int ms)
 {
     // a wrapped label sized to its content comes out a line short: long ones get the full width
-    lv_obj_set_width(s_toast, strlen(text) > 20 ? LCD_W - 16 : LV_SIZE_CONTENT);
+    lv_obj_set_width(s_toast, strlen(text) > 20 ? LCD_W - PX(16) : LV_SIZE_CONTENT);
     lv_label_set_text(s_toast, text);
     lv_obj_remove_flag(s_toast, LV_OBJ_FLAG_HIDDEN);
     s_toast_until = esp_timer_get_time() + ms * 1000LL;
@@ -472,25 +489,25 @@ static void tuning_show(const char *title)
     lv_obj_add_flag(s_tune, LV_OBJ_FLAG_CLICKABLE);
     lv_obj_add_event_cb(s_tune, on_tune_tap, LV_EVENT_CLICKED, NULL);
     lv_obj_t *spin = lv_spinner_create(s_tune);
-    lv_obj_set_size(spin, 64, 64);
-    lv_obj_align(spin, LV_ALIGN_CENTER, 0, -40);
+    lv_obj_set_size(spin, PX(64), PX(64));
+    lv_obj_align(spin, LV_ALIGN_CENTER, 0, -PX(40));
     lv_obj_remove_flag(spin, LV_OBJ_FLAG_CLICKABLE);
-    lv_obj_set_style_arc_width(spin, 6, LV_PART_MAIN);
-    lv_obj_set_style_arc_width(spin, 6, LV_PART_INDICATOR);
+    lv_obj_set_style_arc_width(spin, PX(6), LV_PART_MAIN);
+    lv_obj_set_style_arc_width(spin, PX(6), LV_PART_INDICATOR);
     lv_obj_set_style_arc_color(spin, lv_color_hex(C_PANEL), LV_PART_MAIN);
     lv_obj_set_style_arc_color(spin, lv_color_hex(C_ACCENT), LV_PART_INDICATOR);
     lv_obj_t *name = label(s_tune, f18, C_TEXT);
-    lv_obj_set_size(name, LCD_W - 20, 24);
+    lv_obj_set_size(name, LCD_W - PX(20), PX(24));
     lv_obj_set_style_text_align(name, LV_TEXT_ALIGN_CENTER, 0);
     lv_label_set_long_mode(name, LV_LABEL_LONG_DOT);
     lv_label_set_text(name, title);
-    lv_obj_align(name, LV_ALIGN_CENTER, 0, 18);
+    lv_obj_align(name, LV_ALIGN_CENTER, 0, PX(18));
     s_tune_secs = label(s_tune, f18, C_ACCENT);
     lv_label_set_text(s_tune_secs, "Tuning...");
-    lv_obj_align(s_tune_secs, LV_ALIGN_CENTER, 0, 46);
+    lv_obj_align(s_tune_secs, LV_ALIGN_CENTER, 0, PX(46));
     lv_obj_t *hint = label(s_tune, f14, C_DIM);
     lv_label_set_text(hint, "Tap to cancel");
-    lv_obj_align(hint, LV_ALIGN_BOTTOM_MID, 0, -14);
+    lv_obj_align(hint, LV_ALIGN_BOTTOM_MID, 0, -PX(14));
 }
 
 static void tuning_seconds(int s)
@@ -566,15 +583,15 @@ static void position_line(lv_obj_t *parent, const char *pre, int at_s, int y)
     }
     lv_obj_t *l = label(parent, f22, C_TEXT);
     lv_label_set_text(l, text);
-    lv_obj_align(l, LV_ALIGN_CENTER, 0, y);
+    lv_obj_align(l, LV_ALIGN_CENTER, 0, PX(y));
     if (s_play_dur_s) {
         lv_obj_t *bar = lv_bar_create(parent);
-        lv_obj_set_size(bar, LCD_W - 40, 8);
+        lv_obj_set_size(bar, LCD_W - PX(40), PX(8));
         lv_bar_set_range(bar, 0, s_play_dur_s);
         lv_bar_set_value(bar, at_s < s_play_dur_s ? at_s : s_play_dur_s, LV_ANIM_OFF);
         lv_obj_set_style_bg_color(bar, lv_color_hex(0x3a434d), LV_PART_MAIN);
         lv_obj_set_style_bg_color(bar, lv_color_hex(C_ACCENT), LV_PART_INDICATOR);
-        lv_obj_align(bar, LV_ALIGN_CENTER, 0, y + 24);
+        lv_obj_align(bar, LV_ALIGN_CENTER, 0, PX(y + 24));
     }
 }
 
@@ -594,11 +611,11 @@ static uint16_t *make_info(void)
 {
     lv_obj_t *in = black_screen();
     lv_obj_t *t = label(in, f22, C_ACCENT);
-    lv_obj_set_width(t, LCD_W - 20);
+    lv_obj_set_width(t, LCD_W - PX(20));
     lv_label_set_long_mode(t, LV_LABEL_LONG_WRAP);
     lv_obj_set_style_text_align(t, LV_TEXT_ALIGN_CENTER, 0);
     lv_label_set_text(t, s_play_title);
-    lv_obj_align(t, LV_ALIGN_CENTER, 0, s_play_live ? -30 : -50);
+    lv_obj_align(t, LV_ALIGN_CENTER, 0, PX(s_play_live ? -30 : -50));
     lv_obj_t *d = label(in, f14, C_DIM);
     char text[96];
     if (s_now_index >= 0) {
@@ -609,7 +626,7 @@ static uint16_t *make_info(void)
     }
     lv_obj_set_style_text_align(d, LV_TEXT_ALIGN_CENTER, 0);
     lv_label_set_text(d, text);
-    lv_obj_align(d, LV_ALIGN_CENTER, 0, s_play_live ? 50 : 70);
+    lv_obj_align(d, LV_ALIGN_CENTER, 0, PX(s_play_live ? 50 : 70));
     if (!s_play_live) {
         position_line(in, "", tv_playing() ? play_pos_s() : s_play_at_s, 10);
     }
@@ -634,7 +651,7 @@ static uint16_t *make_seek(void)
     snprintf(text, sizeof(text), "%s%s", s_seek_s < 0 ? "-" : "+", by);
     lv_obj_t *l = label(o, f28, C_ACCENT);
     lv_label_set_text(l, text);
-    lv_obj_align(l, LV_ALIGN_CENTER, 0, -40);
+    lv_obj_align(l, LV_ALIGN_CENTER, 0, -PX(40));
     position_line(o, "→ ", seek_target(), 10);
     return render(o, LCD_W, LCD_H);
 }
@@ -683,11 +700,13 @@ static void make_overlays(const char *title, bool live)
     for (int i = 0; i < 9; i++) {
         bool ch = (i == 0 || i == 2) && live;
         bool on = i != 7 && (ch || (i != 0 && i != 2) || s_now_index >= 0);
-        lv_obj_t *c = box(g, (i % 3) * 80 + 2, (i / 3) * 80 + 2, 76, 76, i == 4 ? 0x5a1f1f : i == 7 ? 0x000000 : C_PANEL);
+        int cw = LCD_W / 3, chh = LCD_H / 3; // the whole screen: square on the 1.54
+        lv_obj_t *c = box(g, (i % 3) * cw + 2, (i / 3) * chh + 2, cw - 4, chh - 4,
+                          i == 4 ? 0x5a1f1f : i == 7 ? 0x000000 : C_PANEL);
         lv_obj_t *l = label(c, i == 7 ? f14 : f18, on ? C_TEXT : C_DIM);
         lv_obj_set_style_text_align(l, LV_TEXT_ALIGN_CENTER, 0);
         if (i == 7) {
-            lv_obj_set_width(l, 76);
+            lv_obj_set_width(l, LCD_W / 3 - 4);
             lv_label_set_long_mode(l, LV_LABEL_LONG_WRAP);
             lv_label_set_text(l, title);
         } else if (s_seekable && (i == 3 || i == 5)) {
@@ -1037,7 +1056,8 @@ static void ctl_task(void *arg)
             continue;
         }
         s_ov_until = esp_timer_get_time() + OVERLAY_MS * 1000LL;
-        int cell = (c.y / 80 > 2 ? 2 : c.y / 80) * 3 + (c.x / 80 > 2 ? 2 : c.x / 80);
+        int row = c.y * 3 / LCD_H, col = c.x * 3 / LCD_W;
+        int cell = (row > 2 ? 2 : row) * 3 + (col > 2 ? 2 : col);
         switch (cell) {
         case 0: step_item(-1); break;
         case 1:
@@ -1181,13 +1201,19 @@ void ui_set_off_minutes(int minutes)
     display_save("off", s_off_min);
 }
 
+// Each board keeps its own: the 1.54's under the name it always had
+static const char *cal_key(void)
+{
+    return board_info()->id == BOARD_AMOLED18 ? "touchcal_a18" : "touchcal";
+}
+
 static void cal_load(void)
 {
     nvs_handle_t h;
     touch_cal_t c;
     size_t len = sizeof(c);
     if (nvs_open(NVS_NS, NVS_READONLY, &h) == ESP_OK) {
-        if (nvs_get_blob(h, "touchcal", &c, &len) == ESP_OK && len == sizeof(c)) {
+        if (nvs_get_blob(h, cal_key(), &c, &len) == ESP_OK && len == sizeof(c)) {
             board_touch_set_cal(&c);
         }
         nvs_close(h);
@@ -1228,8 +1254,10 @@ static void cal_finish(void)
     for (int i = 0; i < 5; i++) {
         rx[i] = s_cal_raw[i][0];
         ry[i] = s_cal_raw[i][1];
-        tx[i] = s_cal_at[i][0];
-        ty[i] = s_cal_at[i][1];
+        int cx, cy;
+        cal_at(i, &cx, &cy);
+        tx[i] = cx;
+        ty[i] = cy;
     }
     touch_cal_t c[2] = {{.swap = false}, {.swap = true}};
     float err[2];
@@ -1241,7 +1269,7 @@ static void cal_finish(void)
         board_touch_set_cal(&c[best]);
         nvs_handle_t h;
         if (nvs_open(NVS_NS, NVS_READWRITE, &h) == ESP_OK) {
-            nvs_set_blob(h, "touchcal", &c[best], sizeof(c[best]));
+            nvs_set_blob(h, cal_key(), &c[best], sizeof(c[best]));
             nvs_commit(h);
             nvs_close(h);
         }
@@ -1366,7 +1394,7 @@ static void on_gesture(gesture_t g, int x, int y)
             }
             s_result_gen++;
         } else if (g == G_TAP) {
-            int r = (y - HEAD_H) / ROW_H, c = x / 80;
+            int r = (y - HEAD_H) / ROW_H, c = x * 3 / LCD_W;
             pad_key(s_pad_keys[(r > 3 ? 3 : r) * 3 + (c > 2 ? 2 : c)]);
         }
         return;
@@ -1561,7 +1589,7 @@ static void setup_view(void)
     setup_status(status, sizeof(status));
     snprintf(text, sizeof(text), "Join %s\n%s", SETUP_SSID, status[0] ? status : "then open any web page");
     note(text, setup_failed() ? C_WARN : C_TEXT);
-    lv_obj_align(s_note, LV_ALIGN_TOP_MID, 0, HEAD_H + QR_PX + 18);
+    lv_obj_align(s_note, LV_ALIGN_TOP_MID, 0, HEAD_H + QR_PX + PX(18));
 }
 
 static void rebuild(void)
@@ -1587,14 +1615,16 @@ static void rebuild(void)
     if (s_view == VIEW_CAL) {
         rows_hidden();
         head_set("Touch test");
-        lv_obj_set_pos(s_cal, s_cal_at[s_cal_step % 5][0] - 14, s_cal_at[s_cal_step % 5][1] - 14);
+        int cx, cy;
+        cal_at(s_cal_step % 5, &cx, &cy);
+        lv_obj_set_pos(s_cal, cx - PX(14), cy - PX(14));
         char text[96];
         snprintf(text, sizeof(text), "Tap the centre of the dot\n%d of 5", s_cal_step + 1);
         note(text, C_DIM);
-        lv_obj_align(s_note, LV_ALIGN_CENTER, 0, s_cal_step == 4 ? 50 : 0);
+        lv_obj_align(s_note, LV_ALIGN_CENTER, 0, s_cal_step == 4 ? PX(50) : 0);
         return;
     }
-    lv_obj_align(s_note, LV_ALIGN_TOP_LEFT, 8, HEAD_H + 8);
+    lv_obj_align(s_note, LV_ALIGN_TOP_LEFT, PX(8), HEAD_H + PX(8));
     if (s_view == VIEW_PAD) {
         rows_hidden();
         char text[48];
@@ -1653,8 +1683,8 @@ static void rebuild(void)
         if (!scrolling) {
             lv_label_set_long_mode(s_row_text[i], name ? LV_LABEL_LONG_CLIP : LV_LABEL_LONG_DOT);
         }
-        lv_obj_set_height(s_row_text[i], value ? 22 : 28);
-        lv_obj_align(s_row_text[i], LV_ALIGN_LEFT_MID, 40, value ? 11 : 0);
+        lv_obj_set_height(s_row_text[i], PX(value ? 22 : 28));
+        lv_obj_align(s_row_text[i], LV_ALIGN_LEFT_MID, PX(40), PX(value ? 11 : 0));
         lbl(s_row_text[i], value ? value : text);
         if (name && value && s_version_opened) {
             s_version_opened = false;
@@ -1676,8 +1706,8 @@ static void rebuild(void)
 // leave: the number pad's typed channel needs it.
 static void head_fit(void)
 {
-    int right = 26 + (s_batt_shown ? 62 : 0) + (lv_label_get_text(s_pageno)[0] ? 42 : 0);
-    int w = LCD_W - 34 - right;
+    int right = PX(26 + (s_batt_shown ? 62 : 0) + (lv_label_get_text(s_pageno)[0] ? 42 : 0));
+    int w = LCD_W - PX(34) - right;
     if (lv_obj_get_style_width(s_head, 0) != w) {
         lv_obj_set_width(s_head, w);
         lv_obj_update_layout(s_head);           // the new width now, not at the next refresh,
@@ -1700,8 +1730,8 @@ static void battery_line(void)
     if (shown != s_batt_shown) {
         s_batt_shown = shown;
         show(s_batt, shown);
-        lv_obj_set_width(s_pageno, shown ? 42 : 50);
-        lv_obj_align(s_pageno, LV_ALIGN_TOP_RIGHT, shown ? -86 : -26, 9);
+        lv_obj_set_width(s_pageno, PX(shown ? 42 : 50));
+        lv_obj_align(s_pageno, LV_ALIGN_TOP_RIGHT, -PX(shown ? 86 : 26), PX(9));
         head_fit();
     }
     if (shown) {
@@ -1794,77 +1824,77 @@ static void build_power_overlay(void)
     lv_obj_set_style_bg_color(s_power, lv_color_hex(0x000000), 0);
     lv_obj_set_style_bg_opa(s_power, LV_OPA_90, 0);
     s_power_arc = lv_arc_create(s_power);
-    lv_obj_set_size(s_power_arc, 120, 120);
-    lv_obj_align(s_power_arc, LV_ALIGN_CENTER, 0, -14);
+    lv_obj_set_size(s_power_arc, PX(120), PX(120));
+    lv_obj_align(s_power_arc, LV_ALIGN_CENTER, 0, -PX(14));
     lv_arc_set_rotation(s_power_arc, 270);
     lv_arc_set_bg_angles(s_power_arc, 0, 360);
     lv_arc_set_range(s_power_arc, 0, 3000);
     lv_obj_remove_style(s_power_arc, NULL, LV_PART_KNOB);
     lv_obj_remove_flag(s_power_arc, LV_OBJ_FLAG_CLICKABLE);
-    lv_obj_set_style_arc_width(s_power_arc, 8, LV_PART_MAIN);
-    lv_obj_set_style_arc_width(s_power_arc, 8, LV_PART_INDICATOR);
+    lv_obj_set_style_arc_width(s_power_arc, PX(8), LV_PART_MAIN);
+    lv_obj_set_style_arc_width(s_power_arc, PX(8), LV_PART_INDICATOR);
     lv_obj_set_style_arc_color(s_power_arc, lv_color_hex(0x2a323b), LV_PART_MAIN);
     lv_obj_set_style_arc_color(s_power_arc, lv_color_hex(C_TEXT), LV_PART_INDICATOR);
     lv_obj_t *icon = lv_label_create(s_power_arc);
-    lv_obj_set_style_text_font(icon, &lv_font_montserrat_28, 0);
+    lv_obj_set_style_text_font(icon, sym(28), 0);
     lv_obj_set_style_text_color(icon, lv_color_hex(C_TEXT), 0);
     lv_label_set_text(icon, LV_SYMBOL_POWER);
     lv_obj_center(icon);
     s_power_lbl = label(s_power, f18, C_TEXT);
-    lv_obj_align(s_power_lbl, LV_ALIGN_BOTTOM_MID, 0, -28);
+    lv_obj_align(s_power_lbl, LV_ALIGN_BOTTOM_MID, 0, -PX(28));
     lv_obj_add_flag(s_power, LV_OBJ_FLAG_HIDDEN);
 }
 
 static void build_screen(lv_obj_t *scr)
 {
     // the heading: back at the left end, the folder's name, the page, the battery, Wi-Fi
-    s_head_back = label(scr, &lv_font_montserrat_20, C_ACCENT);
+    s_head_back = label(scr, sym(20), C_ACCENT);
     lv_label_set_text(s_head_back, LV_SYMBOL_LEFT);
-    lv_obj_align(s_head_back, LV_ALIGN_TOP_LEFT, 8, 6);
+    lv_obj_align(s_head_back, LV_ALIGN_TOP_LEFT, PX(8), PX(6));
     s_head = label(scr, f18, C_ACCENT);
-    lv_obj_set_size(s_head, LCD_W - 34 - 70, 24);
+    lv_obj_set_size(s_head, LCD_W - PX(34 + 70), PX(24));
     lv_label_set_long_mode(s_head, LV_LABEL_LONG_DOT);
-    lv_obj_align(s_head, LV_ALIGN_TOP_LEFT, 34, 7);
+    lv_obj_align(s_head, LV_ALIGN_TOP_LEFT, PX(34), PX(7));
     s_pageno = label(scr, f14, C_DIM);
-    lv_obj_set_width(s_pageno, 50);
+    lv_obj_set_width(s_pageno, PX(50));
     lv_label_set_long_mode(s_pageno, LV_LABEL_LONG_CLIP); // "12/67" on one line, never wrapped
     lv_obj_set_style_text_align(s_pageno, LV_TEXT_ALIGN_RIGHT, 0);
-    lv_obj_align(s_pageno, LV_ALIGN_TOP_RIGHT, -26, 9);
-    s_wifi = label(scr, &lv_font_montserrat_14, C_DIM);
+    lv_obj_align(s_pageno, LV_ALIGN_TOP_RIGHT, -PX(26), PX(9));
+    s_wifi = label(scr, sym(14), C_DIM);
     lv_label_set_text(s_wifi, LV_SYMBOL_WIFI);
-    lv_obj_align(s_wifi, LV_ALIGN_TOP_RIGHT, -6, 9);
+    lv_obj_align(s_wifi, LV_ALIGN_TOP_RIGHT, -PX(6), PX(9));
     s_batt = label(scr, f14, C_TEXT); // "87%" and the battery's symbol (DejaVu, then Montserrat's)
-    lv_obj_set_width(s_batt, 60); // "100%" and the symbol
+    lv_obj_set_width(s_batt, PX(60)); // "100%" and the symbol
     lv_label_set_long_mode(s_batt, LV_LABEL_LONG_CLIP); // one line, never wrapped under the heading
     lv_obj_set_style_text_align(s_batt, LV_TEXT_ALIGN_RIGHT, 0);
-    lv_obj_align(s_batt, LV_ALIGN_TOP_RIGHT, -24, 9);
+    lv_obj_align(s_batt, LV_ALIGN_TOP_RIGHT, -PX(24), PX(9));
     lv_obj_add_flag(s_batt, LV_OBJ_FLAG_HIDDEN);
 
     for (int i = 0; i < ROWS; i++) {
-        s_row[i] = box(scr, 4, HEAD_H + i * ROW_H + 1, LCD_W - 8, ROW_H - 2, C_PANEL);
-        s_row_icon[i] = label(s_row[i], &lv_font_montserrat_20, C_ACCENT);
-        lv_obj_align(s_row_icon[i], LV_ALIGN_LEFT_MID, 10, 0);
-        s_row_new[i] = box(s_row[i], 31, 7, 11, 11, C_WARN); // on the icon's top right corner
+        s_row[i] = box(scr, PX(4), HEAD_H + i * ROW_H + 1, LCD_W - PX(8), ROW_H - 2, C_PANEL);
+        s_row_icon[i] = label(s_row[i], sym(20), C_ACCENT);
+        lv_obj_align(s_row_icon[i], LV_ALIGN_LEFT_MID, PX(10), 0);
+        s_row_new[i] = box(s_row[i], PX(31), (ROW_H - 2) / 2 - PX(19), PX(11), PX(11), C_WARN); // on the icon's top right corner
         lv_obj_set_style_radius(s_row_new[i], LV_RADIUS_CIRCLE, 0);
         lv_obj_set_style_border_color(s_row_new[i], lv_color_hex(C_PANEL), 0);
         lv_obj_set_style_border_width(s_row_new[i], 2, 0);
         lv_obj_add_flag(s_row_new[i], LV_OBJ_FLAG_HIDDEN);
         s_row_text[i] = label(s_row[i], f22, C_TEXT);
-        lv_obj_set_size(s_row_text[i], LCD_W - 8 - 46, 28); // one line, cut short with "..."
+        lv_obj_set_size(s_row_text[i], LCD_W - PX(8 + 46), PX(28)); // one line, cut short with "..."
         lv_label_set_long_mode(s_row_text[i], LV_LABEL_LONG_DOT);
-        lv_obj_align(s_row_text[i], LV_ALIGN_LEFT_MID, 40, 0);
+        lv_obj_align(s_row_text[i], LV_ALIGN_LEFT_MID, PX(40), 0);
         s_row_cap[i] = label(s_row[i], f18, C_TEXT);
-        lv_obj_set_size(s_row_cap[i], LCD_W - 8 - 46, 22);
+        lv_obj_set_size(s_row_cap[i], LCD_W - PX(8 + 46), PX(22));
         lv_label_set_long_mode(s_row_cap[i], LV_LABEL_LONG_DOT);
-        lv_obj_align(s_row_cap[i], LV_ALIGN_LEFT_MID, 40, -11);
+        lv_obj_align(s_row_cap[i], LV_ALIGN_LEFT_MID, PX(40), -PX(11));
         lv_obj_add_flag(s_row_cap[i], LV_OBJ_FLAG_HIDDEN);
         lv_obj_add_flag(s_row[i], LV_OBJ_FLAG_HIDDEN);
     }
     s_note = label(scr, f18, C_DIM);
-    lv_obj_set_width(s_note, LCD_W - 16);
+    lv_obj_set_width(s_note, LCD_W - PX(16));
     lv_label_set_long_mode(s_note, LV_LABEL_LONG_WRAP);
     lv_obj_set_style_text_align(s_note, LV_TEXT_ALIGN_CENTER, 0);
-    lv_obj_align(s_note, LV_ALIGN_TOP_LEFT, 8, HEAD_H + 8);
+    lv_obj_align(s_note, LV_ALIGN_TOP_LEFT, PX(8), HEAD_H + PX(8));
 
     // the number pad: 3 x 4 keys under the heading
     s_pad = lv_obj_create(scr);
@@ -1873,8 +1903,9 @@ static void build_screen(lv_obj_t *scr)
     lv_obj_set_size(s_pad, LCD_W, LCD_H - HEAD_H);
     lv_obj_remove_flag(s_pad, LV_OBJ_FLAG_CLICKABLE | LV_OBJ_FLAG_SCROLLABLE);
     for (int i = 0; i < 12; i++) {
-        lv_obj_t *k = box(s_pad, (i % 3) * 80 + 3, (i / 3) * ROW_H + 2, 74, ROW_H - 4, i == 11 ? 0x0277bd : C_PANEL);
-        lv_obj_t *l = label(k, i == 11 ? &lv_font_montserrat_28 : f28, C_TEXT);
+        int kw = LCD_W / 3;
+        lv_obj_t *k = box(s_pad, (i % 3) * kw + 3, (i / 3) * ROW_H + 2, kw - 6, ROW_H - 4, i == 11 ? 0x0277bd : C_PANEL);
+        lv_obj_t *l = label(k, i == 11 ? sym(28) : f28, C_TEXT);
         char t[4] = {s_pad_keys[i], 0};
         lv_label_set_text(l, i == 11 ? LV_SYMBOL_PLAY : t);
         lv_obj_center(l);
@@ -1884,7 +1915,7 @@ static void build_screen(lv_obj_t *scr)
     // the touch test's dot
     s_cal = lv_obj_create(scr);
     lv_obj_remove_style_all(s_cal);
-    lv_obj_set_size(s_cal, 28, 28);
+    lv_obj_set_size(s_cal, PX(28), PX(28));
     lv_obj_set_style_radius(s_cal, LV_RADIUS_CIRCLE, 0);
     lv_obj_set_style_bg_color(s_cal, lv_color_hex(C_ACCENT), 0);
     lv_obj_set_style_bg_opa(s_cal, LV_OPA_COVER, 0);
@@ -1900,8 +1931,8 @@ static void build_screen(lv_obj_t *scr)
     lv_qrcode_set_light_color(s_qr, lv_color_hex(0xffffff));
     lv_qrcode_update(s_qr, SETUP_QR, strlen(SETUP_QR));
     lv_obj_set_style_border_color(s_qr, lv_color_hex(0xffffff), 0);
-    lv_obj_set_style_border_width(s_qr, 6, 0);
-    lv_obj_align(s_qr, LV_ALIGN_TOP_MID, 0, HEAD_H + 4);
+    lv_obj_set_style_border_width(s_qr, PX(6), 0);
+    lv_obj_align(s_qr, LV_ALIGN_TOP_MID, 0, HEAD_H + PX(4));
     lv_obj_add_flag(s_qr, LV_OBJ_FLAG_HIDDEN);
 
     // over everything on the screen: every touch comes here
@@ -1978,10 +2009,10 @@ void ui_start(void)
     }
 
     lvgl_port_lock(0);
-    f14 = ttf(14);
-    f18 = ttf(18);
-    f22 = ttf(22);
-    f28 = ttf(28);
+    f14 = ttf(PX(14));
+    f18 = ttf(PX(18));
+    f22 = ttf(PX(22));
+    f28 = ttf(PX(28));
     lv_obj_t *scr = lv_screen_active();
     lv_obj_set_style_bg_color(scr, lv_color_hex(C_BG), 0);
     lv_obj_set_style_text_color(scr, lv_color_hex(C_TEXT), 0);
@@ -1991,12 +2022,12 @@ void ui_start(void)
     s_toast = lv_label_create(lv_layer_top());
     lv_obj_set_style_bg_color(s_toast, lv_color_hex(0x000000), 0);
     lv_obj_set_style_bg_opa(s_toast, LV_OPA_80, 0);
-    lv_obj_set_style_radius(s_toast, 12, 0);
-    lv_obj_set_style_pad_all(s_toast, 14, 0);
+    lv_obj_set_style_radius(s_toast, PX(12), 0);
+    lv_obj_set_style_pad_all(s_toast, PX(14), 0);
     lv_obj_set_style_text_font(s_toast, f22, 0);
     lv_obj_set_style_text_color(s_toast, lv_color_hex(C_TEXT), 0);
     lv_obj_set_style_text_align(s_toast, LV_TEXT_ALIGN_CENTER, 0);
-    lv_obj_set_style_max_width(s_toast, LCD_W - 16, 0); // long errors wrap instead of running off
+    lv_obj_set_style_max_width(s_toast, LCD_W - PX(16), 0); // long errors wrap instead of running off
     lv_label_set_long_mode(s_toast, LV_LABEL_LONG_WRAP);
     lv_obj_center(s_toast);
     lv_obj_add_flag(s_toast, LV_OBJ_FLAG_HIDDEN);
