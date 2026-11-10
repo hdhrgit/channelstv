@@ -255,6 +255,50 @@ static bool sta_saved(void)
 }
 
 static esp_timer_handle_t s_retry;
+static volatile int s_rssi_avg; // dBm, smoothed (roam_task); 0 until connected
+
+// Every connect looks on all channels and takes the strongest access point with the network's
+// name: the first one heard was often a far one of several.
+static void sta_strongest(wifi_config_t *cfg)
+{
+    cfg->sta.scan_method = WIFI_ALL_CHANNEL_SCAN;
+    cfg->sta.sort_method = WIFI_CONNECT_AP_BY_SIGNAL;
+    cfg->sta.threshold.rssi = -127;
+}
+
+// The signal, smoothed for the screen. Weak for half a minute while nothing plays: if an
+// access point of the same network is clearly stronger, reconnect (to the strongest).
+#define ROAM_BELOW  -75
+#define ROAM_GAIN   8 // dB better than now
+#define ROAM_MS     2000
+static void roam_task(void *arg)
+{
+    int weak = 0;
+    while (true) {
+        vTaskDelay(pdMS_TO_TICKS(ROAM_MS));
+        wifi_ap_record_t ap;
+        if (!s_connected || esp_wifi_sta_get_ap_info(&ap) != ESP_OK) {
+            s_rssi_avg = 0;
+            weak = 0;
+            continue;
+        }
+        s_rssi_avg = s_rssi_avg ? (s_rssi_avg * 3 + ap.rssi) / 4 : ap.rssi;
+        weak = s_rssi_avg < ROAM_BELOW ? weak + 1 : 0;
+        if (weak < 15 || tv_playing() || player_is_playing() || setup_active()) {
+            continue; // a scan stalls the stream for a moment: only when nothing plays
+        }
+        weak = 0;
+        wifi_scan_config_t sc = {.ssid = ap.ssid};
+        uint16_t n = 1;
+        wifi_ap_record_t best;
+        if (esp_wifi_scan_start(&sc, true) == ESP_OK && esp_wifi_scan_get_ap_records(&n, &best) == ESP_OK && n &&
+            best.rssi >= s_rssi_avg + ROAM_GAIN && memcmp(best.bssid, ap.bssid, 6)) {
+            ESP_LOGI(TAG, "moving to a stronger access point: %d dBm, now %d", best.rssi, s_rssi_avg);
+            esp_wifi_disconnect(); // the reconnect takes the strongest
+        }
+        esp_wifi_clear_ap_list();
+    }
+}
 // The network saved when the setup hotspot opened (none on the first start): it goes back in
 // place of a network picked on the setup page that doesn't take, so a wrong password neither
 // stands in for a network that works nor keeps the hotspot shut at the next start.
@@ -326,6 +370,9 @@ static void wifi_start(void)
         // nothing saved yet: the network from menuconfig
         strlcpy((char *)cfg.sta.ssid, CONFIG_CHANNELSTV_WIFI_SSID, sizeof(cfg.sta.ssid));
         strlcpy((char *)cfg.sta.password, CONFIG_CHANNELSTV_WIFI_PASSWORD, sizeof(cfg.sta.password));
+    }
+    if (cfg.sta.ssid[0]) {
+        sta_strongest(&cfg);
         esp_wifi_set_config(WIFI_IF_STA, &cfg);
     }
     esp_wifi_start();
@@ -344,7 +391,7 @@ void app_net(net_t *out)
     wifi_ap_record_t ap;
     if (s_connected && esp_wifi_sta_get_ap_info(&ap) == ESP_OK) {
         strlcpy(out->ssid, (const char *)ap.ssid, sizeof(out->ssid));
-        out->rssi = ap.rssi;
+        out->rssi = s_rssi_avg ? s_rssi_avg : ap.rssi;
     } else {
         wifi_config_t cfg;
         if (esp_wifi_get_config(WIFI_IF_STA, &cfg) == ESP_OK) {
@@ -363,6 +410,7 @@ void app_set_wifi(const char *ssid, const char *password)
     wifi_config_t cfg = {0};
     strlcpy((char *)cfg.sta.ssid, ssid, sizeof(cfg.sta.ssid));
     strlcpy((char *)cfg.sta.password, password, sizeof(cfg.sta.password));
+    sta_strongest(&cfg);
     setup_on_connecting(ssid);
     esp_timer_stop(s_retry);
     esp_wifi_disconnect();
@@ -481,6 +529,7 @@ void app_main(void)
     esp_pm_lock_create(ESP_PM_CPU_FREQ_MAX, 0, "busy", &s_busy_lock);
     esp_pm_configure(&pm);
     xTaskCreate(power_task, "power", 2560, NULL, 3, NULL);
+    xTaskCreate(roam_task, "roam", 3072, NULL, 2, NULL);
     const esp_timer_create_args_t wd = {.callback = rollback_watchdog, .name = "rollback"};
     esp_timer_handle_t t;
     esp_timer_create(&wd, &t);
