@@ -9,3 +9,9 @@ dependencies:
   espressif/esp_h264: '*'
   espressif/esp_lcd_co5300: ^2.2.0
   espressif/esp_lcd_touch_ft5x06: ^1.1.1
+  # VideoJet (Apache-2.0), an H.264 decoder for the ESP32-S3: not in the registry, so from git,
+  # pinned to the commit the decoder was measured at
+  videojet:
+    git: https://github.com/hdhrgit/VideoJet.git
+    path: components/videojet
+    version: 6e1829a8ce24ae0c7a98b5479d717c529f38f53c
