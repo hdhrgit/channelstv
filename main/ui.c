@@ -45,7 +45,7 @@
 // The backlight's level (Settings, saved), and on battery how long untouched before the screen
 // dims (seconds) and goes dark (minutes); 0: never.
 static int s_bright = 80, s_dim_s = 60, s_off_min = 5;
-static int s_rows = 4;
+static int s_rows = 4, s_head_h = 32;
 // When a page was asked for while the one before stays on the screen (0: none). Blanking the
 // rows for the bridge's answer made the screen flash dark on every page turn; "Loading..."
 // only shows when the answer is slow.
@@ -55,7 +55,8 @@ static volatile int64_t s_loading_us;
 // Sizes are laid out for the 1.54's 240 px wide panel; PX() scales them to this panel's width,
 // so a bigger, denser panel shows the same layout at about the same size on the glass.
 #define PX(v)    ((v) * LCD_W / 240)
-#define HEAD_H   PX(32)
+#define HEAD_H   s_head_h                   // PX(32); on a tall panel as tall as a row
+#define HEAD_DY  ((HEAD_H - PX(32)) / 2)    // what centres the heading's parts in a taller one
 #define ROWS_MAX 6
 #define ROWS     s_rows                     // rows a page: 4 on the 1.54, 6 on the taller AMOLED
 #define ROW_H    ((LCD_H - HEAD_H) / ROWS)  // 52 on the 1.54
@@ -129,6 +130,7 @@ typedef struct {
     char id[80];
     char title[64];
     int page;
+    int total; // its items, from its last answer (0: not known yet)
 } level_t;
 static EXT_RAM_BSS_ATTR level_t s_stack[DEPTH];
 static int s_depth = 1; // s_stack[0] is the top ("0")
@@ -320,6 +322,7 @@ static void settings_rows(void)
         }
     }
     s_total = SET_N;
+    s_stack[s_depth - 1].total = s_total;
 }
 
 // What Version opens, under the heading "Version x.y.z": the board's address, and the bridge's
@@ -364,6 +367,7 @@ static void version_rows(void)
         }
     }
     s_total = s_count;
+    s_stack[s_depth - 1].total = s_total;
 }
 
 // The top folder lists the bridge's folders and, after them, Settings.
@@ -400,6 +404,9 @@ static void browse_task(void *arg)
             }
             s_count = n;
             s_total = total;
+            if (n >= 0) {
+                s_stack[s_depth - 1].total = total;
+            }
             s_loading_us = 0;
             s_result_gen++;
             lvgl_port_unlock();
@@ -423,7 +430,8 @@ static void request_page(void)
     }
     request_t req;
     strlcpy(req.id, lv->id, sizeof(req.id));
-    req.start = lv->page ? page_first(lv->page, s_total) : 0; // s_total: this folder's, from its first page
+    // the folder's own count: s_total may still be that of the folder just left
+    req.start = lv->page ? page_first(lv->page, lv->total) : 0;
     if (s_count > 0) {
         s_loading_us = esp_timer_get_time(); // the rows stay until the new ones come
     } else {
@@ -442,6 +450,7 @@ static void open_folder(const cd_entry_t *e)
     strlcpy(lv->id, e->id, sizeof(lv->id));
     strlcpy(lv->title, e->title, sizeof(lv->title));
     lv->page = 0;
+    lv->total = 0;
     request_page();
 }
 
@@ -1807,10 +1816,30 @@ static void rebuild(void)
 // and a symbol while charging. The heading's page number and title make room for it.
 // The heading's title takes what the page number (when there is one), the battery and Wi-Fi
 // leave: the number pad's typed channel needs it.
+static int text_w(lv_obj_t *l)
+{
+    const char *t = lv_label_get_text(l);
+    return lv_text_get_width(t, strlen(t), lv_obj_get_style_text_font(l, 0), 0);
+}
+
+// The heading's right end, from the right: Wi-Fi, the battery, the page number, each as wide as
+// what it says now; the title takes the rest.
 static void head_fit(void)
 {
-    int right = PX(26 + (s_batt_shown ? 62 : 0) + (lv_label_get_text(s_pageno)[0] ? 42 : 0));
-    int w = LCD_W - PX(34) - right;
+    int r = PX(6) + text_w(s_wifi) + PX(4), y = PX(9) + HEAD_DY;
+    if (s_batt_shown) {
+        int bw = text_w(s_batt) + 2;
+        lv_obj_set_width(s_batt, bw);
+        lv_obj_align(s_batt, LV_ALIGN_TOP_RIGHT, -r, y);
+        r += bw + PX(6);
+    }
+    if (lv_label_get_text(s_pageno)[0]) {
+        int pw = text_w(s_pageno) + 2;
+        lv_obj_set_width(s_pageno, pw);
+        lv_obj_align(s_pageno, LV_ALIGN_TOP_RIGHT, -r, y);
+        r += pw + PX(6);
+    }
+    int w = LCD_W - PX(34) - r;
     if (lv_obj_get_style_width(s_head, 0) != w) {
         lv_obj_set_width(s_head, w);
         lv_obj_update_layout(s_head);           // the new width now, not at the next refresh,
@@ -1833,18 +1862,22 @@ static void battery_line(void)
     if (shown != s_batt_shown) {
         s_batt_shown = shown;
         show(s_batt, shown);
-        lv_obj_set_width(s_pageno, PX(shown ? 42 : 50));
-        lv_obj_align(s_pageno, LV_ALIGN_TOP_RIGHT, -PX(shown ? 86 : 26), PX(9));
         head_fit();
     }
     if (shown) {
         char text[24];
-        if (s_bat.charging) {
+        if (s_rows > 4) {
+            // the tall heading's title is in the rows' larger font: the symbol alone leaves it room
+            snprintf(text, sizeof(text), "%s%s", s_bat.charging ? LV_SYMBOL_CHARGE : "", battery_symbol(s_bat.percent));
+        } else if (s_bat.charging) {
             snprintf(text, sizeof(text), LV_SYMBOL_CHARGE "%d%%%s", s_bat.percent, battery_symbol(s_bat.percent));
         } else {
             snprintf(text, sizeof(text), "%d%%%s", s_bat.percent, battery_symbol(s_bat.percent));
         }
-        lbl(s_batt, text);
+        if (strcmp(lv_label_get_text(s_batt), text)) {
+            lbl(s_batt, text);
+            head_fit(); // "9%" to "10%": the title's room changes
+        }
         lcolor(s_batt, s_bat.percent <= 15 && !s_bat.charging ? C_BAD : C_DIM);
     }
 }
@@ -1958,24 +1991,25 @@ static void build_screen(lv_obj_t *scr)
     // the heading: back at the left end, the folder's name, the page, the battery, Wi-Fi
     s_head_back = label(scr, sym(20), C_ACCENT);
     lv_label_set_text(s_head_back, LV_SYMBOL_LEFT);
-    lv_obj_align(s_head_back, LV_ALIGN_TOP_LEFT, PX(8), PX(6));
-    s_head = label(scr, f18, C_ACCENT);
-    lv_obj_set_size(s_head, LCD_W - PX(34 + 70), PX(24));
+    lv_obj_align(s_head_back, LV_ALIGN_TOP_LEFT, PX(8), PX(6) + HEAD_DY);
+    bool tall = s_rows > 4; // a heading as tall as a row: the rows' font for the title
+    s_head = label(scr, tall ? f22 : f18, C_ACCENT);
+    lv_obj_set_size(s_head, LCD_W - PX(34 + 70), tall ? PX(28) : PX(24));
     lv_label_set_long_mode(s_head, LV_LABEL_LONG_DOT);
-    lv_obj_align(s_head, LV_ALIGN_TOP_LEFT, PX(34), PX(7));
+    lv_obj_align(s_head, LV_ALIGN_TOP_LEFT, PX(34), tall ? (HEAD_H - PX(28)) / 2 : PX(7));
     s_pageno = label(scr, f14, C_DIM);
     lv_obj_set_width(s_pageno, PX(50));
     lv_label_set_long_mode(s_pageno, LV_LABEL_LONG_CLIP); // "12/67" on one line, never wrapped
     lv_obj_set_style_text_align(s_pageno, LV_TEXT_ALIGN_RIGHT, 0);
-    lv_obj_align(s_pageno, LV_ALIGN_TOP_RIGHT, -PX(26), PX(9));
+    lv_obj_align(s_pageno, LV_ALIGN_TOP_RIGHT, -PX(26), PX(9) + HEAD_DY);
     s_wifi = label(scr, sym(14), C_DIM);
     lv_label_set_text(s_wifi, LV_SYMBOL_WIFI);
-    lv_obj_align(s_wifi, LV_ALIGN_TOP_RIGHT, -PX(6), PX(9));
+    lv_obj_align(s_wifi, LV_ALIGN_TOP_RIGHT, -PX(6), PX(9) + HEAD_DY);
     s_batt = label(scr, f14, C_TEXT); // "87%" and the battery's symbol (DejaVu, then Montserrat's)
     lv_obj_set_width(s_batt, PX(60)); // "100%" and the symbol
     lv_label_set_long_mode(s_batt, LV_LABEL_LONG_CLIP); // one line, never wrapped under the heading
     lv_obj_set_style_text_align(s_batt, LV_TEXT_ALIGN_RIGHT, 0);
-    lv_obj_align(s_batt, LV_ALIGN_TOP_RIGHT, -PX(24), PX(9));
+    lv_obj_align(s_batt, LV_ALIGN_TOP_RIGHT, -PX(24), PX(9) + HEAD_DY);
     lv_obj_add_flag(s_batt, LV_OBJ_FLAG_HIDDEN);
 
     for (int i = 0; i < ROWS_MAX; i++) {
@@ -2089,9 +2123,14 @@ void ui_start(void)
     s_requests = xQueueCreate(4, sizeof(request_t));
     s_ctl = xQueueCreate(8, sizeof(ctl_t));
     strcpy(s_stack[0].id, "0");
-    // as many rows as fit at about 64 px each (a comfortable finger), 4 to 6
-    s_rows = (LCD_H - HEAD_H) / 64;
+    // as many rows as fit at about 64 px each (a comfortable finger), 4 to 6; with more than 4,
+    // the heading takes a row's height too
+    s_head_h = PX(32);
+    s_rows = (LCD_H - s_head_h) / 64;
     s_rows = s_rows < 4 ? 4 : s_rows > ROWS_MAX ? ROWS_MAX : s_rows;
+    if (s_rows > 4) {
+        s_head_h = LCD_H / (s_rows + 1);
+    }
     cal_load();
     display_load();
     lvgl_port_cfg_t port = ESP_LVGL_PORT_INIT_CONFIG();
