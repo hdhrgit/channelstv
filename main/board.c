@@ -184,7 +184,7 @@ static void amoled_pmu(void)
     if (reg_read(s_pmu, 0x68, &v, 1) == ESP_OK) {
         reg_write(s_pmu, 0x68, v | 0x01); // battery detection
     }
-    reg_write(s_pmu, 0x41, 0x0c); // INTEN2: PWR key short and long press
+    reg_write(s_pmu, 0x41, 0x03); // INTEN2: PWR key pressed and let go
     reg_write(s_pmu, 0x48, 0xff);
     reg_write(s_pmu, 0x49, 0xff);
     reg_write(s_pmu, 0x4a, 0xff);
@@ -644,16 +644,25 @@ void board_backlight(int percent)
 static key_fn s_key_fn;
 static volatile int s_held_ms;
 
-// The AMOLED-1.8's PWR key belongs to the AXP2101, which tells of a short press (a long one
-// powers the board off by itself); BOOT does all the 1.54's PWR does.
-static bool pmu_key_short(void)
+// The AMOLED-1.8's PWR key (button 2) belongs to the AXP2101, which tells when it goes down
+// and when it comes up again: it does all the 1.54's PWR does, and switches the board on.
+// BOOT (button 1) does the volume: a tap up, held down.
+static bool s_pwr_down;
+
+// Whether PWR is down now; *tap if it went down and up again since the last look.
+static bool pmu_key(bool *tap)
 {
     uint8_t st = 0;
-    if (reg_read(s_pmu, 0x49, &st, 1) != ESP_OK || !(st & 0x0c)) {
-        return false;
+    *tap = false;
+    if (reg_read(s_pmu, 0x49, &st, 1) == ESP_OK && (st & 0x03)) {
+        reg_write(s_pmu, 0x49, st & 0x03);
+        if ((st & 0x03) == 0x03 && !s_pwr_down) {
+            *tap = true; // both within one look: a quick tap
+        } else {
+            s_pwr_down = st & 0x02 && !(st & 0x01);
+        }
     }
-    reg_write(s_pmu, 0x49, st & 0x0c);
-    return st & 0x08;
+    return s_pwr_down;
 }
 
 static void keys_task(void *arg)
@@ -661,23 +670,28 @@ static void keys_task(void *arg)
     gpio_num_t pins[3] = {PIN_KEY_POWER, PIN_KEY_UP, PIN_KEY_DOWN};
     int nkeys = 3;
     if (AMOLED) {
-        pins[0] = A_KEY_BOOT;
-        nkeys = 1;
+        pins[0] = GPIO_NUM_NC; // the AXP2101's
+        pins[1] = A_KEY_BOOT;
+        nkeys = 2;
     }
     int held_ms[3] = {0};
     bool long_sent[3] = {0};
     // a key held at boot (BOOT is GPIO0) must be released before it counts
     bool armed[3];
     for (int i = 0; i < nkeys; i++) {
-        armed[i] = gpio_get_level(pins[i]) == 1;
+        armed[i] = pins[i] == GPIO_NUM_NC || gpio_get_level(pins[i]) == 1;
     }
     while (true) {
         vTaskDelay(pdMS_TO_TICKS(20));
-        if (AMOLED && pmu_key_short()) {
-            s_key_fn(KEY_POWER, PRESS_SHORT);
+        bool pwr_down = false, pwr_tap = false;
+        if (AMOLED) {
+            pwr_down = pmu_key(&pwr_tap);
+            if (pwr_tap) {
+                s_key_fn(KEY_POWER, PRESS_SHORT);
+            }
         }
         for (int i = 0; i < nkeys; i++) {
-            bool down = gpio_get_level(pins[i]) == 0;
+            bool down = pins[i] == GPIO_NUM_NC ? pwr_down : gpio_get_level(pins[i]) == 0;
             if (!armed[i]) {
                 armed[i] = !down;
                 continue;
@@ -693,13 +707,13 @@ static void keys_task(void *arg)
                     s_key_fn(i, PRESS_HOLD); // ten a second, for the power-off countdown
                 } else if (i != KEY_POWER && held_ms[i] >= 500 && held_ms[i] % REPEAT_MS == 0) {
                     long_sent[i] = true;
-                    s_key_fn(i, PRESS_REPEAT); // volume keys repeat while held
+                    s_key_fn(AMOLED ? KEY_VOL_DOWN : i, PRESS_REPEAT); // volume keys repeat while held
                 }
             } else {
                 if (i == KEY_POWER && held_ms[i] >= HOLD_MS && !long_sent[i]) {
                     s_key_fn(i, PRESS_CANCEL); // let go before the power-off
                 } else if (held_ms[i] >= 40 && !long_sent[i]) {
-                    s_key_fn(i, PRESS_SHORT);
+                    s_key_fn(AMOLED && i == 1 ? KEY_VOL_UP : i, PRESS_SHORT);
                 }
                 held_ms[i] = 0;
                 long_sent[i] = false;
@@ -949,15 +963,13 @@ void board_power_off(unsigned wake_s)
     if (AMOLED) {
         esp_lcd_panel_disp_on_off(s_panel, false);
         esp_lcd_panel_disp_sleep(s_panel, true);
-        battery_t b;
-        pmu_battery(&b);
-        if (wake_s == 0 && !b.usb) {
+        if (wake_s == 0) {
             uint8_t v = 0;
             reg_read(s_pmu, 0x10, &v, 1);
             reg_write(s_pmu, 0x10, v | 0x01); // the AXP2101 cuts all power; PWR starts it again
             vTaskDelay(pdMS_TO_TICKS(500));
         }
-        // on USB power, or to wake by itself: deep sleep until BOOT (or the timer)
+        // still here, or to wake by itself: deep sleep until BOOT (or the timer)
         for (int i = 0; i < 100 && gpio_get_level(A_KEY_BOOT) == 0; i++) {
             vTaskDelay(pdMS_TO_TICKS(50));
         }
