@@ -152,6 +152,7 @@ static bridge_state_t s_bridge_state = (bridge_state_t)-1;
 // the touch now under way
 static int s_t_x0, s_t_y0, s_t_x, s_t_y;
 static int64_t s_t_t0;
+static int s_swipe_dy, s_swipe_ms; // the last vertical swipe, for the fling (0: from the web API)
 static bool s_t_long;   // a long press was taken: its release is nothing more
 static int s_pressed_row = -1;
 
@@ -455,6 +456,54 @@ static void go_back(void)
     }
 }
 
+// A fling: a quick swipe slides through many pages, slowing down, with the page number large
+// over the list; only the page it stops on is fetched. A tap stops it where it is.
+static lv_obj_t *s_fling_box, *s_fling_lbl;
+static lv_timer_t *s_fling_timer;
+static int s_fling_from, s_fling_to, s_fling_at, s_fling_pages;
+static int64_t s_fling_t0, s_fling_us;
+
+// Pages a vertical swipe of dy px in ms moves: one for a slow one; past 2 screens a second, the
+// square of the speed over two (5 screens a second: 12 pages)
+static int ui_fling_pages(int dy, int ms, int screen_h)
+{
+    if (ms <= 0 || screen_h <= 0) {
+        return 1;
+    }
+    float sps = (float)abs(dy) / screen_h * 1000.0f / ms;
+    if (sps < 2.0f) {
+        return 1;
+    }
+    int n = (int)(sps * sps / 2 + 0.5f);
+    return n < 1 ? 1 : n;
+}
+
+static void fling_end(void)
+{
+    if (s_fling_timer) {
+        lv_timer_delete(s_fling_timer);
+        s_fling_timer = NULL;
+    }
+    show(s_fling_box, false);
+    level_t *lv = &s_stack[s_depth - 1];
+    if (lv->page != s_fling_at) {
+        lv->page = s_fling_at;
+        request_page();
+    }
+}
+
+static void fling_step(lv_timer_t *t)
+{
+    float p = (esp_timer_get_time() - s_fling_t0) / (float)s_fling_us;
+    p = p > 1 ? 1 : p;
+    p = 1 - (1 - p) * (1 - p); // easing out: fast at first, slowing to a stop
+    s_fling_at = s_fling_from + (int)((s_fling_to - s_fling_from) * p + (s_fling_to > s_fling_from ? 0.5f : -0.5f));
+    lv_label_set_text_fmt(s_fling_lbl, "%d / %d", s_fling_at + 1, s_fling_pages);
+    if (p >= 1) {
+        fling_end();
+    }
+}
+
 static void turn_page(int dir)
 {
     level_t *lv = &s_stack[s_depth - 1];
@@ -462,9 +511,32 @@ static void turn_page(int dir)
     if (pages <= 1 || s_count < 0 || s_loading_us) {
         return;
     }
-    int p = lv->page + dir;
-    lv->page = p < 0 ? pages - 1 : p >= pages ? 0 : p;
-    request_page();
+    int n = s_swipe_ms ? ui_fling_pages(s_swipe_dy, s_swipe_ms, LCD_H) : 1;
+    s_swipe_ms = 0;
+    if (n <= 1) {
+        int p = lv->page + dir;
+        lv->page = p < 0 ? pages - 1 : p >= pages ? 0 : p;
+        request_page();
+        return;
+    }
+    // many pages: slide, and stop at the first or last page rather than going round
+    int from = s_fling_timer ? s_fling_at : lv->page, to = from + dir * n;
+    to = to < 0 ? 0 : to >= pages ? pages - 1 : to;
+    if (to == from) {
+        return;
+    }
+    s_fling_from = from;
+    s_fling_to = to;
+    s_fling_at = from;
+    s_fling_pages = pages;
+    s_fling_t0 = esp_timer_get_time();
+    int d = abs(to - from);
+    s_fling_us = (300 + 90 * (int)(log2f(d) * 2)) * 1000LL; // a longer slide for more pages, under 2 s
+    show(s_fling_box, true);
+    if (!s_fling_timer) {
+        s_fling_timer = lv_timer_create(fling_step, 30, NULL);
+    }
+    fling_step(NULL);
 }
 
 // ---------------------------------------------------------------- playing
@@ -1384,6 +1456,10 @@ static void activate_row(int i)
 
 static void on_gesture(gesture_t g, int x, int y)
 {
+    if (s_fling_timer && g != G_UP && g != G_DOWN) {
+        fling_end(); // a tap (or anything) stops the slide where it is
+        return;
+    }
     lv_display_trigger_activity(NULL);
     if (setup_active()) {
         return; // nothing to browse until the board is on a network
@@ -1496,6 +1572,8 @@ static void on_touch(lv_event_t *e)
         int dx = s_t_x - s_t_x0, dy = s_t_y - s_t_y0, adx = abs(dx), ady = abs(dy);
         int ms = (esp_timer_get_time() - s_t_t0) / 1000;
         if ((adx > SWIPE_PX || ady > SWIPE_PX) && ms < SWIPE_MS) {
+            s_swipe_dy = dy;
+            s_swipe_ms = ms;
             on_gesture(adx > ady ? (dx > 0 ? G_RIGHT : G_LEFT) : (dy > 0 ? G_DOWN : G_UP), s_t_x0, s_t_y0);
         } else if (adx < TAP_PX && ady < TAP_PX) {
             on_gesture(G_TAP, s_t_x0, s_t_y0);
@@ -2066,6 +2144,13 @@ void ui_start(void)
     lv_obj_add_flag(s_toast, LV_OBJ_FLAG_HIDDEN);
 
     build_power_overlay();
+    // the fling's page number, large over the list
+    s_fling_box = box(lv_layer_top(), 0, 0, PX(150), PX(64), 0x000000);
+    lv_obj_set_style_bg_opa(s_fling_box, LV_OPA_80, 0);
+    lv_obj_center(s_fling_box);
+    s_fling_lbl = label(s_fling_box, f28, C_TEXT);
+    lv_obj_center(s_fling_lbl);
+    show(s_fling_box, false);
     lv_timer_create(refresh, 100, NULL);
     refresh(NULL);
     lvgl_port_unlock();
