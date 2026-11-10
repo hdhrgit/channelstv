@@ -148,7 +148,7 @@ static void gesture_step(gesture_t *g)
     g->down = down;
 }
 
-#define STRIP_LINES 20 // LVGL's draw buffers are LCD_W x 20
+#define STRIP_LINES DRAW_LINES // LVGL's draw buffers are LCD_W x DRAW_LINES (even)
 
 // LVGL's two internal-RAM draw buffers, borrowed while the picture holds the LVGL lock: internal
 // RAM is too tight (Wi-Fi, the decoder) for the player to keep strips of its own.
@@ -216,8 +216,9 @@ static void draw_frame(esp_lcd_panel_handle_t panel, uint16_t *strip[2], const u
 static void draw_rgb(esp_lcd_panel_handle_t panel, uint16_t *strip[2], const uint16_t *img, int rot)
 {
     for (int y = 0, k = 0; y < LCD_H; y += STRIP_LINES, k ^= 1) {
-        board_turn_rows(img, LCD_W, LCD_H, rot, y, STRIP_LINES, strip[k]);
-        esp_lcd_panel_draw_bitmap(panel, 0, y, LCD_W, y + STRIP_LINES, strip[k]);
+        int lines = LCD_H - y < STRIP_LINES ? LCD_H - y : STRIP_LINES;
+        board_turn_rows(img, LCD_W, LCD_H, rot, y, lines, strip[k]);
+        esp_lcd_panel_draw_bitmap(panel, 0, y, LCD_W, y + lines, strip[k]);
     }
 }
 
@@ -305,25 +306,28 @@ static void draw_task(void *arg)
         bool sideways = board_video_rotation() & 1 && LCD_W != LCD_H; // no bar under the picture then
         if (s_banner && !overlay_on && !sideways && banner_on != s_banner_want && s_pic_h &&
             (LCD_H - s_pic_h) / 2 >= BANNER_H) {
-            // through a strip (BANNER_H == STRIP_LINES), not a buffer of its own: that took 15 KB of
+            // through a strip, a strip's rows at a time, not a buffer of its own: that took 15 KB of
             // internal RAM on the AMOLED. A window command waits for the pixels sent before it, so
-            // one before frees the strip from the last frame, and one after keeps the next frame
-            // from writing into it while the banner still goes out.
+            // one before frees the strip from the last frame, and one after each part keeps the
+            // next from writing into it while that part still goes out.
             uint16_t *b = s_strip[0];
             esp_lcd_panel_draw_bitmap(panel, 0, 0, 1, 1, s_sync_px);
             banner_on = s_banner_want;
             int rot = board_rotation();
-            if (banner_on) {
-                board_turn_rows(s_banner, LCD_W, BANNER_H, rot, 0, rot & 1 ? LCD_W : BANNER_H, b);
-            } else {
-                memset(b, 0, LCD_W * BANNER_H * 2);
-            }
             // in the bar under the picture
-            int y = ((LCD_H + s_pic_h) / 2 + ((LCD_H - s_pic_h) / 2 - BANNER_H) / 2) & ~1, px, py;
-            board_turn_rect(0, y, LCD_W, BANNER_H, rot, &px, &py);
-            int pw = rot & 1 ? BANNER_H : LCD_W, ph = rot & 1 ? LCD_W : BANNER_H;
-            esp_lcd_panel_draw_bitmap(panel, px, py, px + pw, py + ph, b);
-            esp_lcd_panel_draw_bitmap(panel, 0, 0, 1, 1, s_sync_px);
+            int y = ((LCD_H + s_pic_h) / 2 + ((LCD_H - s_pic_h) / 2 - BANNER_H) / 2) & ~1;
+            for (int r = 0; r < BANNER_H; r += STRIP_LINES) {
+                int lines = BANNER_H - r < STRIP_LINES ? BANNER_H - r : STRIP_LINES, px, py;
+                if (banner_on) {
+                    board_turn_rows(s_banner + r * LCD_W, LCD_W, lines, rot, 0, rot & 1 ? LCD_W : lines, b);
+                } else {
+                    memset(b, 0, LCD_W * lines * 2);
+                }
+                board_turn_rect(0, y + r, LCD_W, lines, rot, &px, &py);
+                int pw = rot & 1 ? lines : LCD_W, ph = rot & 1 ? LCD_W : lines;
+                esp_lcd_panel_draw_bitmap(panel, px, py, px + pw, py + ph, b);
+                esp_lcd_panel_draw_bitmap(panel, 0, 0, 1, 1, s_sync_px);
+            }
         }
         if (s_overlay_dirty) {
             s_overlay_dirty = false;
@@ -335,7 +339,7 @@ static void draw_task(void *arg)
             } else {
                 memset(s_strip[0], 0, LCD_W * STRIP_LINES * 2); // black around the picture again
                 for (int y = 0; y < LCD_H; y += STRIP_LINES) {
-                    esp_lcd_panel_draw_bitmap(panel, 0, y, LCD_W, y + STRIP_LINES, s_strip[0]);
+                    esp_lcd_panel_draw_bitmap(panel, 0, y, LCD_W, y + (LCD_H - y < STRIP_LINES ? LCD_H - y : STRIP_LINES), s_strip[0]);
                 }
                 esp_lcd_panel_draw_bitmap(panel, 0, 0, 1, 1, s_strip[1]); // the black strip has left
                 banner_on = false;
@@ -1030,7 +1034,7 @@ static void tv_video_task(void *arg)
     vTaskDelay(pdMS_TO_TICKS(20));
     memset(s_strip[0], 0, LCD_W * STRIP_LINES * 2);
     for (int y = 0; y < LCD_H; y += STRIP_LINES) {
-        esp_lcd_panel_draw_bitmap(board_lcd_panel(), 0, y, LCD_W, y + STRIP_LINES, s_strip[0]);
+        esp_lcd_panel_draw_bitmap(board_lcd_panel(), 0, y, LCD_W, y + (LCD_H - y < STRIP_LINES ? LCD_H - y : STRIP_LINES), s_strip[0]);
     }
     s_clk = (clock_t_){.audio = s_dm->ts.apid != 0, .t0_us = esp_timer_get_time()};
     for (int i = 0; s_clk.audio && i < 150 && !player_pipe_open(s_audio_gen) && !s_stop; i++) {

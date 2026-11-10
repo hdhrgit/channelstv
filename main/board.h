@@ -19,6 +19,9 @@ extern int g_lcd_w, g_lcd_h;
 #define LCD_W g_lcd_w
 #define LCD_H g_lcd_h
 #define LCD_MAX_W 368 // the widest of the boards' panels
+// Rows in each of LVGL's two draw buffers (internal DMA RAM; playback borrows them as its strips):
+// 20 on the 1.54, 8 on the wider AMOLED, where 20 took 29 KB of internal RAM
+#define DRAW_LINES (LCD_W > 240 ? 8 : 20)
 #define SAMPLE_RATE 44100
 
 // KEY_VOL_CYCLE: down in steps, from 0 round to 100 again (the AMOLED-1.8's BOOT held)

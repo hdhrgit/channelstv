@@ -2140,7 +2140,7 @@ void ui_start(void)
     lvgl_port_display_cfg_t disp = {
         .io_handle = board_lcd_io(),
         .panel_handle = board_lcd_panel(),
-        .buffer_size = LCD_W * 20, // internal DMA RAM, x2; playback borrows them too
+        .buffer_size = LCD_W * DRAW_LINES, // internal DMA RAM, x2; playback borrows them too
         .double_buffer = true,
         .hres = LCD_W,
         .vres = LCD_H,
