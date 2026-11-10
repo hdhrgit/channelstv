@@ -45,13 +45,17 @@
 // The backlight's level (Settings, saved), and on battery how long untouched before the screen
 // dims (seconds) and goes dark (minutes); 0: never.
 static int s_bright = 80, s_dim_s = 60, s_off_min = 5;
+static int s_rows = 4;
 
 // Sizes are laid out for the 1.54's 240 px wide panel; PX() scales them to this panel's width,
 // so a bigger, denser panel shows the same layout at about the same size on the glass.
 #define PX(v)    ((v) * LCD_W / 240)
 #define HEAD_H   PX(32)
-#define ROWS     4                          // rows a page
+#define ROWS_MAX 6
+#define ROWS     s_rows                     // rows a page: 4 on the 1.54, 6 on the taller AMOLED
 #define ROW_H    ((LCD_H - HEAD_H) / ROWS)  // 52 on the 1.54
+#define PR(v)    ((v) * ROW_H / 52)         // inside a row: scaled to the row's height
+#define PAD_H    ((LCD_H - HEAD_H) / 4)     // the number pad's 4 rows of keys
 #define BACK_W   PX(60)                     // the heading's left end goes back
 #define DEPTH    8                          // folders deep
 #define SWIPE_PX PX(40)
@@ -102,9 +106,9 @@ typedef enum { G_NONE, G_TAP, G_LONG, G_UP, G_DOWN, G_LEFT, G_RIGHT } gesture_t;
 static lv_font_t *f14, *f18, *f22, *f28;
 static lv_obj_t *s_head_back, *s_head, *s_pageno, *s_wifi, *s_batt;
 static bool s_batt_shown;
-static lv_obj_t *s_row[ROWS], *s_row_icon[ROWS], *s_row_text[ROWS];
-static lv_obj_t *s_row_cap[ROWS]; // the Version page's names, over their values in s_row_text
-static lv_obj_t *s_row_new[ROWS]; // a dot on a recording nobody has watched (upnp:playbackCount 0)
+static lv_obj_t *s_row[ROWS_MAX], *s_row_icon[ROWS_MAX], *s_row_text[ROWS_MAX];
+static lv_obj_t *s_row_cap[ROWS_MAX]; // the Version page's names, over their values in s_row_text
+static lv_obj_t *s_row_new[ROWS_MAX]; // a dot on a recording nobody has watched (upnp:playbackCount 0)
 static lv_obj_t *s_note;       // a message in place of the rows
 static lv_obj_t *s_pad;        // the number pad's grid
 static lv_obj_t *s_cal;        // the touch test's target
@@ -131,7 +135,7 @@ typedef struct {
     int start;
 } request_t;
 static QueueHandle_t s_requests;
-static EXT_RAM_BSS_ATTR cd_entry_t s_entries[ROWS];
+static EXT_RAM_BSS_ATTR cd_entry_t s_entries[ROWS_MAX];
 static volatile int s_count = -2;   // -2 loading, -1 failed
 static volatile int s_total;        // entries in the folder, the settings row included at the top
 static volatile unsigned s_result_gen, s_shown_gen;
@@ -351,7 +355,7 @@ static void version_rows(void)
 // The top folder lists the bridge's folders and, after them, Settings.
 static void browse_task(void *arg)
 {
-    static EXT_RAM_BSS_ATTR cd_entry_t fresh[ROWS];
+    static EXT_RAM_BSS_ATTR cd_entry_t fresh[ROWS_MAX];
     request_t req;
     while (true) {
         xQueueReceive(s_requests, &req, portMAX_DELAY);
@@ -1394,7 +1398,7 @@ static void on_gesture(gesture_t g, int x, int y)
             }
             s_result_gen++;
         } else if (g == G_TAP) {
-            int r = (y - HEAD_H) / ROW_H, c = x * 3 / LCD_W;
+            int r = (y - HEAD_H) / PAD_H, c = x * 3 / LCD_W;
             pad_key(s_pad_keys[(r > 3 ? 3 : r) * 3 + (c > 2 ? 2 : c)]);
         }
         return;
@@ -1683,8 +1687,8 @@ static void rebuild(void)
         if (!scrolling) {
             lv_label_set_long_mode(s_row_text[i], name ? LV_LABEL_LONG_CLIP : LV_LABEL_LONG_DOT);
         }
-        lv_obj_set_height(s_row_text[i], PX(value ? 22 : 28));
-        lv_obj_align(s_row_text[i], LV_ALIGN_LEFT_MID, PX(40), PX(value ? 11 : 0));
+        lv_obj_set_height(s_row_text[i], PR(value ? 22 : 28));
+        lv_obj_align(s_row_text[i], LV_ALIGN_LEFT_MID, PX(40), PR(value ? 11 : 0));
         lbl(s_row_text[i], value ? value : text);
         if (name && value && s_version_opened) {
             s_version_opened = false;
@@ -1870,7 +1874,7 @@ static void build_screen(lv_obj_t *scr)
     lv_obj_align(s_batt, LV_ALIGN_TOP_RIGHT, -PX(24), PX(9));
     lv_obj_add_flag(s_batt, LV_OBJ_FLAG_HIDDEN);
 
-    for (int i = 0; i < ROWS; i++) {
+    for (int i = 0; i < ROWS_MAX; i++) {
         s_row[i] = box(scr, PX(4), HEAD_H + i * ROW_H + 1, LCD_W - PX(8), ROW_H - 2, C_PANEL);
         s_row_icon[i] = label(s_row[i], sym(20), C_ACCENT);
         lv_obj_align(s_row_icon[i], LV_ALIGN_LEFT_MID, PX(10), 0);
@@ -1880,13 +1884,13 @@ static void build_screen(lv_obj_t *scr)
         lv_obj_set_style_border_width(s_row_new[i], 2, 0);
         lv_obj_add_flag(s_row_new[i], LV_OBJ_FLAG_HIDDEN);
         s_row_text[i] = label(s_row[i], f22, C_TEXT);
-        lv_obj_set_size(s_row_text[i], LCD_W - PX(8 + 46), PX(28)); // one line, cut short with "..."
+        lv_obj_set_size(s_row_text[i], LCD_W - PX(8 + 46), PR(28)); // one line, cut short with "..."
         lv_label_set_long_mode(s_row_text[i], LV_LABEL_LONG_DOT);
         lv_obj_align(s_row_text[i], LV_ALIGN_LEFT_MID, PX(40), 0);
         s_row_cap[i] = label(s_row[i], f18, C_TEXT);
-        lv_obj_set_size(s_row_cap[i], LCD_W - PX(8 + 46), PX(22));
+        lv_obj_set_size(s_row_cap[i], LCD_W - PX(8 + 46), PR(22));
         lv_label_set_long_mode(s_row_cap[i], LV_LABEL_LONG_DOT);
-        lv_obj_align(s_row_cap[i], LV_ALIGN_LEFT_MID, PX(40), -PX(11));
+        lv_obj_align(s_row_cap[i], LV_ALIGN_LEFT_MID, PX(40), -PR(11));
         lv_obj_add_flag(s_row_cap[i], LV_OBJ_FLAG_HIDDEN);
         lv_obj_add_flag(s_row[i], LV_OBJ_FLAG_HIDDEN);
     }
@@ -1904,7 +1908,7 @@ static void build_screen(lv_obj_t *scr)
     lv_obj_remove_flag(s_pad, LV_OBJ_FLAG_CLICKABLE | LV_OBJ_FLAG_SCROLLABLE);
     for (int i = 0; i < 12; i++) {
         int kw = LCD_W / 3;
-        lv_obj_t *k = box(s_pad, (i % 3) * kw + 3, (i / 3) * ROW_H + 2, kw - 6, ROW_H - 4, i == 11 ? 0x0277bd : C_PANEL);
+        lv_obj_t *k = box(s_pad, (i % 3) * kw + 3, (i / 3) * PAD_H + 2, kw - 6, PAD_H - 4, i == 11 ? 0x0277bd : C_PANEL);
         lv_obj_t *l = label(k, i == 11 ? sym(28) : f28, C_TEXT);
         char t[4] = {s_pad_keys[i], 0};
         lv_label_set_text(l, i == 11 ? LV_SYMBOL_PLAY : t);
@@ -1981,6 +1985,9 @@ void ui_start(void)
     s_requests = xQueueCreate(4, sizeof(request_t));
     s_ctl = xQueueCreate(8, sizeof(ctl_t));
     strcpy(s_stack[0].id, "0");
+    // as many rows as fit at about 64 px each (a comfortable finger), 4 to 6
+    s_rows = (LCD_H - HEAD_H) / 64;
+    s_rows = s_rows < 4 ? 4 : s_rows > ROWS_MAX ? ROWS_MAX : s_rows;
     cal_load();
     display_load();
     lvgl_port_cfg_t port = ESP_LVGL_PORT_INIT_CONFIG();
