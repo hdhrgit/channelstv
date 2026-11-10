@@ -161,9 +161,27 @@ static char s_draw_err[64];
 // Turned with the board (rot), it still goes out in the panel's own row order.
 static void draw_frame(esp_lcd_panel_handle_t panel, uint16_t *strip[2], const uint8_t *frame, int w, int h, int rot)
 {
+    if (rot & 1 && LCD_W != LCD_H) {
+        // a tall panel turned sideways: the picture across its whole height, stretched to fit
+        int W = LCD_H, H = (W * h / w) & ~1;
+        H = H > LCD_W ? LCD_W & ~1 : H;
+        int x = ((LCD_W - H) / 2) & ~1;
+        const uint8_t *pu = frame + w * h, *pv = pu + (w / 2) * (h / 2);
+        board_wait_scan(0);
+        for (int row = 0, s = 0; row < W; row += STRIP_LINES, s ^= 1) {
+            int lines = W - row < STRIP_LINES ? W - row : STRIP_LINES;
+            h264_i420_scaled_turned_to_rgb565be(frame, pu, pv, w, h, W, H, rot, row, lines, strip[s]);
+            esp_err_t err = esp_lcd_panel_draw_bitmap(panel, x, row, x + H, row + lines, strip[s]);
+            if (err != ESP_OK && !s_draw_err[0]) {
+                snprintf(s_draw_err, sizeof(s_draw_err), "draw row %d: %s", row, esp_err_to_name(err));
+            }
+        }
+        return;
+    }
     int pw = rot & 1 ? h : w, ph = rot & 1 ? w : h;
     int x = (LCD_W - pw) / 2, y = (LCD_H - ph) / 2;
     const uint8_t *pu = frame + w * h, *pv = pu + (w / 2) * (h / 2);
+    board_wait_scan(y); // start just behind the panel's refresh
     for (int row = 0, s = 0; row < ph; row += STRIP_LINES, s ^= 1) { // STRIP_LINES is even
         int lines = ph - row < STRIP_LINES ? ph - row : STRIP_LINES;
         if (rot) {
@@ -265,7 +283,9 @@ static void draw_task(void *arg)
         if (board_rotation_apply()) {
             s_overlay_dirty = true; // the whole screen again, the new way up
         }
-        if (s_banner && !overlay_on && banner_on != s_banner_want && s_pic_h && (LCD_H - s_pic_h) / 2 >= BANNER_H) {
+        bool sideways = board_video_rotation() & 1 && LCD_W != LCD_H; // no bar under the picture then
+        if (s_banner && !overlay_on && !sideways && banner_on != s_banner_want && s_pic_h &&
+            (LCD_H - s_pic_h) / 2 >= BANNER_H) {
             if (!banner_dma) {
                 banner_dma = heap_caps_malloc(LCD_W * BANNER_H * 2, MALLOC_CAP_DMA | MALLOC_CAP_INTERNAL);
             }
@@ -319,7 +339,7 @@ static void draw_task(void *arg)
             int64_t a = esp_timer_get_time();
             s_drstate = "drawing";
             if (!overlay_on) {
-                draw_frame(panel, s_strip, s_fb[fr.buf], fr.w, fr.h, board_rotation());
+                draw_frame(panel, s_strip, s_fb[fr.buf], fr.w, fr.h, board_video_rotation());
             }
             int64_t b = esp_timer_get_time();
             draw_us += b - a;

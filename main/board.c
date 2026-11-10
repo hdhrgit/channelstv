@@ -73,6 +73,7 @@
 #define A_LCD_PCLK_HZ  (40 * 1000 * 1000)
 #define A_TP_INT       GPIO_NUM_21
 #define A_KEY_BOOT     GPIO_NUM_0
+#define A_LCD_TE       GPIO_NUM_13 // the panel's tearing effect line (Waveshare's schematic)
 #define A_GAP_V2       16 // the CO5300's picture starts 16 columns in
 #define EXP_ADDR       0x20 // TCA9554 (V1) / TCAL9534 (V2): panel and touch power and resets
 #define PMU_ADDR       0x34 // AXP2101
@@ -355,6 +356,7 @@ static void backlight_init(void)
 // web API.
 static touch_cal_t s_cal = {.ax = 1, .ay = 1};
 static volatile int s_rot, s_rot_want; // the panel's rotation (board_rotation_apply)
+static volatile int s_vrot;            // the video's: the same, but also quarter turns on a tall panel
 static touch_log_t s_tlog[TOUCH_LOG_N];
 static int s_tlog_n;
 static bool s_tdown;
@@ -444,6 +446,69 @@ static const co5300_lcd_init_cmd_t s_amoled_init[] = {
 
 static uint32_t s_panel_id; // RDDID's three bytes, 0 if it couldn't be read
 
+// The panel pulses TE as each refresh starts at its top row.
+static volatile uint32_t s_te_count;
+static volatile int64_t s_te_us, s_te_period_us;
+
+static void IRAM_ATTR te_isr(void *arg)
+{
+    int64_t now = esp_timer_get_time();
+    if (s_te_us) {
+        s_te_period_us = now - s_te_us;
+    }
+    s_te_us = now;
+    s_te_count++;
+}
+
+static volatile bool s_te_sync; // off until a restart seen with it on is understood
+
+void board_set_te_sync(bool on)
+{
+    s_te_sync = on;
+}
+
+bool board_te_sync(void)
+{
+    return s_te_sync;
+}
+
+int board_te_period_us(void)
+{
+    return esp_timer_get_time() - s_te_us < 100000 ? (int)s_te_period_us : 0;
+}
+
+#define SCAN_MARGIN_US 300 // past the row, for good measure
+
+void board_wait_scan(int y)
+{
+    int period = board_te_period_us();
+    if (!AMOLED || !s_te_sync || period < 5000 || period > 40000) {
+        return;
+    }
+    // the refresh runs top to bottom at a steady pace, faster than a picture is written
+    int64_t pass = s_te_us + (int64_t)period * y / LCD_H + SCAN_MARGIN_US, now = esp_timer_get_time();
+    while (pass + period / 4 < now) {
+        pass += period; // just behind it a quarter of a refresh at most, else the next one
+    }
+    if (pass <= now) {
+        return;
+    }
+    int64_t wait = pass - now;
+    if (wait > 1500) {
+        vTaskDelay(pdMS_TO_TICKS((wait - 500) / 1000));
+    }
+    while (esp_timer_get_time() < pass) {
+    }
+}
+
+static void amoled_te_init(void)
+{
+    gpio_config_t te = {.pin_bit_mask = 1ULL << A_LCD_TE, .mode = GPIO_MODE_INPUT, .intr_type = GPIO_INTR_POSEDGE};
+    gpio_config(&te);
+    gpio_install_isr_service(0);
+    gpio_isr_handler_add(A_LCD_TE, te_isr, NULL);
+}
+
 static void amoled_lcd_init(bool v2)
 {
     spi_bus_config_t bus = CO5300_PANEL_BUS_QSPI_CONFIG(A_LCD_CLK, A_LCD_D0, A_LCD_D1, A_LCD_D2, A_LCD_D3,
@@ -474,6 +539,7 @@ static void amoled_lcd_init(bool v2)
         s_panel_id = id[0] << 16 | id[1] << 8 | id[2];
     }
     esp_lcd_panel_disp_on_off(s_panel, true);
+    amoled_te_init();
 
     esp_lcd_panel_io_handle_t tp_io;
     esp_lcd_panel_io_i2c_config_t tp_io_cfg = v2 ? (esp_lcd_panel_io_i2c_config_t)ESP_LCD_TOUCH_IO_I2C_CST816S_CONFIG()
@@ -843,9 +909,18 @@ bool board_accel(float *x, float *y, float *z)
     if (!s_imu || i2c_master_transmit_receive(s_imu, &reg, 1, a, 6, 50) != ESP_OK) {
         return false;
     }
-    *x = (int16_t)(a[0] | a[1] << 8) / 16384.0f; // +-2 g
-    *y = (int16_t)(a[2] | a[3] << 8) / 16384.0f;
+    float sx = (int16_t)(a[0] | a[1] << 8) / 16384.0f; // +-2 g
+    float sy = (int16_t)(a[2] | a[3] << 8) / 16384.0f;
     *z = (int16_t)(a[4] | a[5] << 8) / 16384.0f;
+    if (AMOLED) {
+        // the AMOLED-1.8's sensor lies turned: its +x points to the panel's top and +y to its
+        // right (Waveshare's ball demo), where the 1.54's +y points up and +x left
+        *x = -sy;
+        *y = sx;
+    } else {
+        *x = sx;
+        *y = sy;
+    }
     return true;
 }
 
@@ -861,17 +936,25 @@ int board_rotation(void)
     return s_rot;
 }
 
+int board_video_rotation(void)
+{
+    return s_vrot;
+}
+
 bool board_rotation_apply(void)
 {
     int r = s_rot_want;
-    if (LCD_W != LCD_H) {
-        r = 0; // a quarter turn changes the screen's shape, which the UI can't follow yet
-    }
-    if (r == s_rot || !s_panel) {
+    if (!s_panel) {
         return false;
     }
+    bool changed = r != s_vrot;
+    s_vrot = r;
+    if (LCD_W != LCD_H) {
+        r = 0; // the menus keep the panel's way up: a quarter turn changes the screen's shape
+    }
+    changed |= r != s_rot;
     s_rot = r;
-    return true;
+    return changed;
 }
 
 void board_turn_rect(int x, int y, int w, int h, int rot, int *px, int *py)
@@ -1045,7 +1128,7 @@ static int chip(char *buf, size_t len, int pos, const char *part, const char *ro
 
 void board_chips_json(char *buf, size_t len)
 {
-    char id[48];
+    char id[64];
     int pos = addf(buf, len, 0, "[");
     esp_chip_info_t ci;
     esp_chip_info(&ci);
@@ -1060,10 +1143,19 @@ void board_chips_json(char *buf, size_t len)
     pos = chip(buf, len, pos, "Wi-Fi", "station", -1, id, true);
     if (AMOLED) {
         bool v2 = !strcmp(s_info.rev, "V2");
+        uint32_t n0 = s_te_count;
+        vTaskDelay(pdMS_TO_TICKS(100));
+        uint32_t te_n = s_te_count - n0;
         bool read = s_panel_id && s_panel_id != 0xffffff; // with nothing driving the line back it reads all ones
         snprintf(id, sizeof(id), read ? "RDDID %06lx" : "answers its init; its ID doesn't read back over QSPI",
                  (unsigned long)s_panel_id);
         pos = chip(buf, len, pos, v2 ? "CO5300" : "SH8601", "AMOLED driver, 368x448, QSPI", -1, id, s_panel != NULL);
+        if (te_n) {
+            snprintf(id, sizeof(id), "GPIO13: %lu pulses in 100 ms, every %.2f ms", (unsigned long)te_n, s_te_period_us / 1000.0);
+        } else {
+            snprintf(id, sizeof(id), "GPIO13: no pulses");
+        }
+        pos = chip(buf, len, pos, "TE", "panel's refresh signal (tearing effect)", -1, id, te_n > 0);
         int t = peek(v2 ? 0x15 : 0x38, v2 ? 0xa7 : 0xa3);
         snprintf(id, sizeof(id), t >= 0 ? "chip ID 0x%02x" : "no answer", t);
         pos = chip(buf, len, pos, v2 ? "CST816" : "FT3168", "touch", v2 ? 0x15 : 0x38, id, t >= 0);

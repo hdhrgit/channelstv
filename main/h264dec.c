@@ -130,6 +130,35 @@ void h264_i420_turned_to_rgb565be(const uint8_t *py, const uint8_t *pu, const ui
     }
 }
 
+void h264_i420_scaled_turned_to_rgb565be(const uint8_t *py, const uint8_t *pu, const uint8_t *pv, int w, int h, int W,
+                                         int H, int rot, int first, int lines, uint16_t *out)
+{
+    // panel column c shows picture row Y (c, or H - 1 - c turned the other way), source row sy
+    static int16_t sy[512];
+    static int last_h, last_H, last_rot;
+    if (h != last_h || H != last_H || rot != last_rot) {
+        for (int c = 0; c < H && c < 512; c++) {
+            int Y = rot == 1 ? c : H - 1 - c;
+            sy[c] = Y * h / H;
+        }
+        last_h = h;
+        last_H = H;
+        last_rot = rot;
+    }
+    for (int r = first; r < first + lines; r++) {
+        // panel row r shows picture column X, source column sx
+        int X = rot == 1 ? W - 1 - r : r;
+        int sx = X * w / W, cx = sx / 2;
+        uint16_t *o = out + (r - first) * H;
+        for (int c = 0; c < H; c++) {
+            int y = sy[c], k = (y / 2) * (w / 2) + cx;
+            int cy = s_y[py[y * w + sx]];
+            o[c] = s_r[cy + s_rv[pv[k]] + CLAMP_OFF] | s_g[cy + s_gu[pu[k]] + s_gv[pv[k]] + CLAMP_OFF] |
+                   s_b[cy + s_bu[pu[k]] + CLAMP_OFF];
+        }
+    }
+}
+
 void h264_i420_to_rgb565be(const uint8_t *yuv, int stride, int coded_h, int w, int h, uint16_t *out)
 {
     const uint8_t *pu = yuv + stride * coded_h, *pv = pu + (stride / 2) * (coded_h / 2);

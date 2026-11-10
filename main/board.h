@@ -94,6 +94,9 @@ bool board_accel(float *x, float *y, float *z);
 // pictures are turned in software on their way to it (board_turn and the functions below).
 void board_rotation_want(int r);
 int board_rotation(void);
+// The way the video is turned: board_rotation() on a square panel; on a tall one the menus stay
+// upright while the video also turns a quarter, to fill the panel's height.
+int board_video_rotation(void);
 bool board_rotation_apply(void);
 
 // How a w x h picture (w and h even) turned rot quarter turns lands on the panel: the panel
@@ -119,6 +122,16 @@ void board_turn_rect(int x, int y, int w, int h, int rot, int *px, int *py);
 void board_turn_rows(const uint16_t *src, int w, int h, int rot, int first, int lines, uint16_t *dst);
 // A w x h RGB565 block turned rot in place (w * h at most LCD_MAX_W * 20).
 void board_turn_in_place(uint16_t *p, int w, int h, int rot);
+// On a panel with its tearing effect line (the AMOLED-1.8), waits until the panel's refresh has
+// just passed panel row y, so a picture written from y downwards stays behind the refresh and
+// never shows half old, half new. Returns at once without the line, with the sync off, or if
+// the pulses stopped; it never waits longer than one refresh.
+void board_wait_scan(int y);
+// The sync on or off (for comparing by eye; not saved), and whether it is on
+void board_set_te_sync(bool on);
+bool board_te_sync(void);
+// The panel's refresh period in us from its TE pulses, 0 without them
+int board_te_period_us(void);
 // The panel's gamma curve: 1.0, 1.8, 2.2 (the power-on default) or 2.5; the nearest is used.
 // Call with the LVGL lock held, so it doesn't land in the middle of a frame.
 bool board_panel_gamma(float gamma);

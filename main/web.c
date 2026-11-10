@@ -238,6 +238,10 @@ static esp_err_t settings(httpd_req_t *req)
     if (query_str(req, "picture", v, sizeof(v))) {
         bridge_set_picture(v);
     }
+    int te = query_int(req, "tesync", -1);
+    if (te >= 0) {
+        board_set_te_sync(te); // until the next restart
+    }
     if (query_str(req, "size", v, sizeof(v))) {
         int w = 0, h = 0;
         sscanf(v, "%dx%d", &w, &h); // "320x180"; "0x0": the board's own
@@ -266,6 +270,8 @@ static esp_err_t settings(httpd_req_t *req)
     char size[16];
     snprintf(size, sizeof(size), "%dx%d", pw, ph);
     cJSON_AddStringToObject(root, "size", size);
+    cJSON_AddBoolToObject(root, "tesync", board_te_sync());
+    cJSON_AddNumberToObject(root, "te_period_us", board_te_period_us());
     cJSON_AddNumberToObject(root, "volume", app_volume());
     cJSON_AddNumberToObject(root, "brightness", ui_brightness());
     if (!ui_dim_seconds()) {
