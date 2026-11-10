@@ -262,6 +262,14 @@ static bool at_local(void)
 
 enum { SET_TOUCH, SET_PICTURE, SET_ROTATION, SET_BRIGHT, SET_DIM, SET_OFF, SET_OTA, SET_WEB, SET_FIND, SET_VERSION, SET_N };
 
+// The first item on a page of a folder of total items: the last page shows the last full
+// page's worth instead of a few rows (it overlaps the page before).
+static int page_first(int page, int total)
+{
+    int first = page * ROWS;
+    return first + ROWS > total && total > ROWS ? total - ROWS : first;
+}
+
 // Settings, a page at a time like any folder.
 static void settings_rows(void)
 {
@@ -269,7 +277,7 @@ static void settings_rows(void)
                                               "OTA updates", "Web control", "Find the bridge again", "Version"};
     static const char *const web[] = {"full", "read-only", "off"};
     static const char *const rotations[] = {"auto", "0\u00b0", "90\u00b0", "180\u00b0", "270\u00b0"};
-    int first = s_stack[s_depth - 1].page * ROWS;
+    int first = page_first(s_stack[s_depth - 1].page, SET_N);
     s_count = 0;
     for (int k = first; k < SET_N && s_count < ROWS; k++) {
         cd_entry_t *e = &s_entries[s_count++];
@@ -408,7 +416,7 @@ static void request_page(void)
     }
     request_t req;
     strlcpy(req.id, lv->id, sizeof(req.id));
-    req.start = lv->page * ROWS;
+    req.start = lv->page ? page_first(lv->page, s_total) : 0; // s_total: this folder's, from its first page
     s_count = -2;
     s_result_gen++;
     xQueueSend(s_requests, &req, 0);
@@ -1298,7 +1306,7 @@ static void activate_row(int i)
         return; // rows that only show
     }
     if (at_settings()) {
-        switch (s_stack[s_depth - 1].page * ROWS + i) {
+        switch (page_first(s_stack[s_depth - 1].page, SET_N) + i) {
         case SET_TOUCH:
             s_view = VIEW_CAL;
             s_cal_step = 0;
@@ -1357,7 +1365,7 @@ static void activate_row(int i)
     if (e->container) {
         open_folder(e);
     } else if (!s_play_busy) {
-        play_entry(s_stack[s_depth - 1].id, s_stack[s_depth - 1].page * ROWS + i, s_total, e);
+        play_entry(s_stack[s_depth - 1].id, page_first(s_stack[s_depth - 1].page, s_total) + i, s_total, e);
     }
 }
 
