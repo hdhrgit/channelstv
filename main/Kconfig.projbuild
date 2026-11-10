@@ -13,7 +13,7 @@ config CHANNELSTV_WIFI_PASSWORD
 
 choice CHANNELSTV_H264_DECODER
     prompt "H.264 decoder"
-    default CHANNELSTV_DEC_ESP_H264
+    default CHANNELSTV_DEC_VIDEOJET
     help
         The software decoder for the video. Both decode constrained baseline, one access unit at a time.
 

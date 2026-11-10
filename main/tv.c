@@ -153,6 +153,7 @@ static void gesture_step(gesture_t *g)
 // LVGL's two internal-RAM draw buffers, borrowed while the picture holds the LVGL lock: internal
 // RAM is too tight (Wi-Fi, the decoder) for the player to keep strips of its own.
 static uint16_t *s_strip[2];
+static DMA_ATTR uint16_t s_sync_px[2]; // black: a one-pixel window command at the panel's corner
 static char s_draw_err[64];
 
 // The panel's SPI DMA can't read the PSRAM frame reliably (only the top of it arrived), so
@@ -186,7 +187,12 @@ static void draw_frame(esp_lcd_panel_handle_t panel, uint16_t *strip[2], const u
         s_frame_draw_ms = (esp_timer_get_time() - t0) / 1000.0f;
         return;
     }
-    int pw = rot & 1 ? h : w, ph = rot & 1 ? w : h;
+    int cx = 0; // a picture wider than the panel (made for it turned sideways): its middle, upright
+    if (w > LCD_W) {
+        rot = 0;
+        cx = ((w - LCD_W) / 2) & ~1;
+    }
+    int pw = rot & 1 ? h : w - 2 * cx, ph = rot & 1 ? w : h;
     int x = (LCD_W - pw) / 2, y = (LCD_H - ph) / 2;
     const uint8_t *pu = frame + w * h, *pv = pu + (w / 2) * (h / 2);
     board_wait_scan(y); // start just behind the panel's refresh
@@ -195,8 +201,8 @@ static void draw_frame(esp_lcd_panel_handle_t panel, uint16_t *strip[2], const u
         if (rot) {
             h264_i420_turned_to_rgb565be(frame, pu, pv, w, h, rot, row, lines, strip[s]);
         } else {
-            h264_i420_rows_to_rgb565be(frame + row * w, pu + row / 2 * (w / 2), pv + row / 2 * (w / 2), w, w, lines,
-                                       strip[s]);
+            h264_i420_rows_to_rgb565be(frame + row * w + cx, pu + row / 2 * (w / 2) + cx / 2, pv + row / 2 * (w / 2) + cx / 2,
+                                       w, pw, lines, strip[s]);
         }
         esp_err_t err = esp_lcd_panel_draw_bitmap(panel, x, y + row, x + pw, y + row + lines, strip[s]);
         if (err != ESP_OK && !s_draw_err[0]) {
@@ -277,6 +283,13 @@ static uint8_t *s_cap;
 static volatile bool s_cap_want, s_cap_done;
 static volatile int s_cap_w, s_cap_h;
 
+// Whether a w x h picture fits the panel: upright, or on a tall panel also across its height
+// (it's shown that way only while the board is turned; upright it is cut to fit then)
+static bool pic_fits(int w, int h)
+{
+    return (w <= LCD_W && h <= LCD_H) || (LCD_W != LCD_H && w <= LCD_H && h <= LCD_W);
+}
+
 static void draw_task(void *arg)
 {
     esp_lcd_panel_handle_t panel = board_lcd_panel();
@@ -285,8 +298,6 @@ static void draw_task(void *arg)
     bool overlay_on = false;
     frame_t fr;
     bool banner_on = false;
-    uint16_t *banner_dma = NULL; // freed a frame after its last use: by then the panel has it
-    int banner_age = 0;
     while ((s_drstate = "waiting", xQueueReceive(s_full_q, &fr, portMAX_DELAY)) && fr.buf != FR_END) {
         if (board_rotation_apply()) {
             s_overlay_dirty = true; // the whole screen again, the new way up
@@ -294,27 +305,25 @@ static void draw_task(void *arg)
         bool sideways = board_video_rotation() & 1 && LCD_W != LCD_H; // no bar under the picture then
         if (s_banner && !overlay_on && !sideways && banner_on != s_banner_want && s_pic_h &&
             (LCD_H - s_pic_h) / 2 >= BANNER_H) {
-            if (!banner_dma) {
-                banner_dma = heap_caps_malloc(LCD_W * BANNER_H * 2, MALLOC_CAP_DMA | MALLOC_CAP_INTERNAL);
+            // through a strip (BANNER_H == STRIP_LINES), not a buffer of its own: that took 15 KB of
+            // internal RAM on the AMOLED. A window command waits for the pixels sent before it, so
+            // one before frees the strip from the last frame, and one after keeps the next frame
+            // from writing into it while the banner still goes out.
+            uint16_t *b = s_strip[0];
+            esp_lcd_panel_draw_bitmap(panel, 0, 0, 1, 1, s_sync_px);
+            banner_on = s_banner_want;
+            int rot = board_rotation();
+            if (banner_on) {
+                board_turn_rows(s_banner, LCD_W, BANNER_H, rot, 0, rot & 1 ? LCD_W : BANNER_H, b);
+            } else {
+                memset(b, 0, LCD_W * BANNER_H * 2);
             }
-            if (banner_dma) {
-                banner_on = s_banner_want;
-                int rot = board_rotation();
-                if (banner_on) {
-                    board_turn_rows(s_banner, LCD_W, BANNER_H, rot, 0, rot & 1 ? LCD_W : BANNER_H, banner_dma);
-                } else {
-                    memset(banner_dma, 0, LCD_W * BANNER_H * 2);
-                }
-                // in the bar under the picture
-                int y = ((LCD_H + s_pic_h) / 2 + ((LCD_H - s_pic_h) / 2 - BANNER_H) / 2) & ~1, px, py;
-                board_turn_rect(0, y, LCD_W, BANNER_H, rot, &px, &py);
-                int pw = rot & 1 ? BANNER_H : LCD_W, ph = rot & 1 ? LCD_W : BANNER_H;
-                esp_lcd_panel_draw_bitmap(panel, px, py, px + pw, py + ph, banner_dma);
-                banner_age = 0;
-            }
-        } else if (banner_dma && !banner_on && ++banner_age > 2) {
-            heap_caps_free(banner_dma);
-            banner_dma = NULL;
+            // in the bar under the picture
+            int y = ((LCD_H + s_pic_h) / 2 + ((LCD_H - s_pic_h) / 2 - BANNER_H) / 2) & ~1, px, py;
+            board_turn_rect(0, y, LCD_W, BANNER_H, rot, &px, &py);
+            int pw = rot & 1 ? BANNER_H : LCD_W, ph = rot & 1 ? LCD_W : BANNER_H;
+            esp_lcd_panel_draw_bitmap(panel, px, py, px + pw, py + ph, b);
+            esp_lcd_panel_draw_bitmap(panel, 0, 0, 1, 1, s_sync_px);
         }
         if (s_overlay_dirty) {
             s_overlay_dirty = false;
@@ -378,7 +387,6 @@ static void draw_task(void *arg)
     // one more window command makes sure the last strip left its buffer
     s_drstate = "ending";
     esp_lcd_panel_draw_bitmap(panel, 0, 0, 1, 1, s_strip[0]);
-    heap_caps_free(banner_dma);
     s_drstate = "ended";
     task_done(&s_draw_running);
 }
@@ -1006,7 +1014,7 @@ static void tv_video_task(void *arg)
         s_stop = true;
         goto done;
     }
-    if (s_pic_w > LCD_W || s_pic_h > LCD_H) {
+    if (!pic_fits(s_pic_w, s_pic_h)) {
         snprintf(s_error, sizeof(s_error), "picture %dx%d doesn't fit the screen", s_pic_w, s_pic_h);
         s_stop = true;
         goto done;
@@ -1056,7 +1064,7 @@ static void tv_video_task(void *arg)
         if (s_banner_want && s_catch_epoch >= 0 && au[8] == (uint8_t)s_catch_epoch) {
             s_banner_want = false; // the first picture from the live edge
         }
-        if (key && kw && (kw != w || kh != h) && kw <= LCD_W && kh <= LCD_H) {
+        if (key && kw && (kw != w || kh != h) && pic_fits(kw, kh)) {
             // a new connection with another picture size: the decoder starts afresh
             h264dec_close(hdec);
             hdec = h264dec_open();

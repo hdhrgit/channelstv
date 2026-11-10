@@ -113,8 +113,9 @@ void bridge_set_size(int w, int h)
 void bridge_size(int *w, int *h)
 {
     bool big = LCD_W > 240;
-    *w = s_pic_w ? s_pic_w : big ? 320 : 0;
-    *h = s_pic_h ? s_pic_h : big ? (s_4x3 ? 240 : 180) : 0;
+    // the panel's width (VideoJet holds 24 fps there, upright and stretched sideways)
+    *w = s_pic_w ? s_pic_w : big ? (s_4x3 ? 320 : LCD_W) : 0;
+    *h = s_pic_h ? s_pic_h : big ? (s_4x3 ? 240 : (LCD_W * 9 / 16) & ~1) : 0;
 }
 
 // ---------------------------------------------------------------- HTTP

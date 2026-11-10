@@ -170,10 +170,8 @@ void h264_i420_scaled_turned_to_rgb565be(const uint8_t *py, const uint8_t *pu, c
     if ((size_t)(h * bw) > blk_n) {
         heap_caps_free(blk);
         blk_n = h * bw + h * 4;
-        blk = heap_caps_malloc(blk_n * 2, MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
-        if (!blk) {
-            blk = heap_caps_malloc(blk_n * 2, MALLOC_CAP_SPIRAM);
-        }
+        // in PSRAM: small enough to stay in the cache while it's read, and internal RAM is short
+        blk = heap_caps_malloc(blk_n * 2, MALLOC_CAP_SPIRAM);
         if (!blk) {
             blk_n = 0;
             return;
