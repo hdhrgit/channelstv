@@ -215,21 +215,29 @@ static void on_key(board_key_t key, press_t press)
         ui_show_volume(app_volume());
         break;
     case KEY_VOL_CYCLE: {
-        // one hold: down to 0, round to 100 and down again; the second time it would reach 0 it
-        // stops at 50 instead, until the key is let go and held again
+        // one hold: down 5 at a time to 0, back up to 100, down again; the second time it gets to
+        // 0 it climbs to 50 and stays there until the key is let go and held again
         static int64_t last_us;
-        static int zeros;
+        static int zeros, dir;
         int64_t now = esp_timer_get_time();
         if (now - last_us > 400000) {
             zeros = 0; // a new hold (the steps come every 250 ms)
+            dir = -5;
         }
         last_us = now;
-        if (zeros >= 2) {
+        int v = app_volume();
+        if (zeros >= 2 && v >= 50) {
             break;
         }
-        int v = app_volume() >= 5 ? app_volume() - 5 : 100;
-        if (v == 0 && ++zeros >= 2) {
-            v = 50;
+        if (v + dir < 0 || v + dir > 100) {
+            dir = -dir;
+        }
+        v += dir;
+        if (v == 0) {
+            zeros++;
+            dir = 5;
+        } else if (v == 100) {
+            dir = -5;
         }
         app_set_volume(v);
         ui_show_volume(app_volume());
