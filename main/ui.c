@@ -46,6 +46,11 @@
 // dims (seconds) and goes dark (minutes); 0: never.
 static int s_bright = 80, s_dim_s = 60, s_off_min = 5;
 static int s_rows = 4;
+// When a page was asked for while the one before stays on the screen (0: none). Blanking the
+// rows for the bridge's answer made the screen flash dark on every page turn; "Loading..."
+// only shows when the answer is slow.
+static volatile int64_t s_loading_us;
+#define LOADING_SHOW_US 500000
 
 // Sizes are laid out for the 1.54's 240 px wide panel; PX() scales them to this panel's width,
 // so a bigger, denser panel shows the same layout at about the same size on the glass.
@@ -394,6 +399,7 @@ static void browse_task(void *arg)
             }
             s_count = n;
             s_total = total;
+            s_loading_us = 0;
             s_result_gen++;
             lvgl_port_unlock();
         }
@@ -417,8 +423,12 @@ static void request_page(void)
     request_t req;
     strlcpy(req.id, lv->id, sizeof(req.id));
     req.start = lv->page ? page_first(lv->page, s_total) : 0; // s_total: this folder's, from its first page
-    s_count = -2;
-    s_result_gen++;
+    if (s_count > 0) {
+        s_loading_us = esp_timer_get_time(); // the rows stay until the new ones come
+    } else {
+        s_count = -2;
+        s_result_gen++;
+    }
     xQueueSend(s_requests, &req, 0);
 }
 
@@ -449,7 +459,7 @@ static void turn_page(int dir)
 {
     level_t *lv = &s_stack[s_depth - 1];
     int pages = (s_total + ROWS - 1) / ROWS;
-    if (pages <= 1 || s_count < 0) {
+    if (pages <= 1 || s_count < 0 || s_loading_us) {
         return;
     }
     int p = lv->page + dir;
@@ -1298,6 +1308,9 @@ static void cal_finish(void)
 
 static void activate_row(int i)
 {
+    if (s_loading_us) {
+        return; // the rows on the screen are about to go
+    }
     if (i < 0 || i >= s_count) {
         return;
     }
@@ -1760,6 +1773,11 @@ static void battery_line(void)
 
 static void refresh(lv_timer_t *timer)
 {
+    if (s_loading_us && esp_timer_get_time() - s_loading_us > LOADING_SHOW_US) {
+        s_loading_us = 0;
+        s_count = -2; // slow: say so
+        s_result_gen++;
+    }
     int64_t now = esp_timer_get_time();
     if (now - s_bat_at > 2000000 || !s_bat_at) {
         board_battery(&s_bat);
