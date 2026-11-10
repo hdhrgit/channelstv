@@ -163,21 +163,32 @@ void h264_i420_scaled_turned_to_rgb565be(const uint8_t *py, const uint8_t *pu, c
     // The strip's few source columns, all rows, converted first two rows at a time with the
     // chroma shared (h264_i420_rows_to_rgb565be), then picked out pixel by pixel: converting each
     // panel pixel on its own took ~50 ms a frame.
-    int a = sx[first], b = sx[first + lines - 1];
-    int x0 = (a < b ? a : b) & ~1, bw = ((a > b ? a : b) - x0 + 2) & ~1;
+    // converted once per strip (a block spanning several strips measured no faster)
+#define BLK_ROWS 0
     static uint16_t *blk;
     static size_t blk_n;
-    if ((size_t)(h * bw) > blk_n) {
-        heap_caps_free(blk);
-        blk_n = h * bw + h * 4;
-        // in PSRAM: small enough to stay in the cache while it's read, and internal RAM is short
-        blk = heap_caps_malloc(blk_n * 2, MALLOC_CAP_SPIRAM);
-        if (!blk) {
-            blk_n = 0;
-            return;
+    static int blk_first = -1, blk_last, x0, bw;
+    if (first == 0 || first < blk_first || first + lines > blk_last) {
+        int last = first + (BLK_ROWS > lines ? BLK_ROWS : lines);
+        last = last > W ? W : last;
+        int a = sx[first], b = sx[last - 1];
+        x0 = (a < b ? a : b) & ~1;
+        bw = ((a > b ? a : b) - x0 + 2) & ~1;
+        if ((size_t)(h * bw) > blk_n) {
+            heap_caps_free(blk);
+            blk_n = h * bw + h * 4;
+            // in PSRAM: small enough to stay in the cache while it's read, and internal RAM is short
+            blk = heap_caps_malloc(blk_n * 2, MALLOC_CAP_SPIRAM);
+            if (!blk) {
+                blk_n = 0;
+                blk_first = -1;
+                return;
+            }
         }
+        h264_i420_rows_to_rgb565be(py + x0, pu + x0 / 2, pv + x0 / 2, w, bw, h, blk);
+        blk_first = first;
+        blk_last = last;
     }
-    h264_i420_rows_to_rgb565be(py + x0, pu + x0 / 2, pv + x0 / 2, w, bw, h, blk);
     for (int c = 0; c < H; c++) {
         const uint16_t *src = blk + sy[c] * bw - x0;
         uint16_t *o = out + c;
