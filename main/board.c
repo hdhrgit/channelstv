@@ -1,11 +1,17 @@
-// Board bring-up, see board.h. Pins from the factory firmware's config for this board.
+// Board bring-up, see board.h. The 1.54's pins are from its factory firmware's config, the
+// AMOLED-1.8's from Waveshare's board support package for it (both versions).
 
 #include "board.h"
 #include "esp_sleep.h"
 #include "driver/rtc_io.h"
 
+#include <stdarg.h>
 #include <stdio.h>
 #include <string.h>
+#include "esp_chip_info.h"
+#include "esp_flash.h"
+#include "esp_mac.h"
+#include "esp_psram.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "driver/gpio.h"
@@ -19,8 +25,10 @@
 #include "esp_adc/adc_cali.h"
 #include "esp_adc/adc_cali_scheme.h"
 #include "esp_codec_dev_defaults.h"
+#include "esp_lcd_co5300.h"
 #include "esp_lcd_panel_vendor.h"
 #include "esp_lcd_touch_cst816s.h"
+#include "esp_lcd_touch_ft5x06.h"
 #include "esp_log.h"
 #include "esp_timer.h"
 #include "esp_heap_caps.h"
@@ -48,7 +56,29 @@
 #define PIN_BAT_ADC    GPIO_NUM_1  // ADC1 channel 0, battery through a 1/3 divider
 #define PIN_CHARGING   GPIO_NUM_3  // low while the charger is charging
 
-#define IMU_ADDR  0x6b // QMI8658
+// AMOLED-1.8
+#define A_I2C_SDA      GPIO_NUM_15
+#define A_I2C_SCL      GPIO_NUM_14
+#define A_I2S_MCLK     GPIO_NUM_16
+#define A_I2S_BCLK     GPIO_NUM_9
+#define A_I2S_WS       GPIO_NUM_45
+#define A_I2S_DOUT     GPIO_NUM_8
+#define A_PA           GPIO_NUM_46
+#define A_LCD_CS       GPIO_NUM_12
+#define A_LCD_CLK      GPIO_NUM_11
+#define A_LCD_D0       GPIO_NUM_4
+#define A_LCD_D1       GPIO_NUM_5
+#define A_LCD_D2       GPIO_NUM_6
+#define A_LCD_D3       GPIO_NUM_7
+#define A_LCD_PCLK_HZ  (40 * 1000 * 1000)
+#define A_TP_INT       GPIO_NUM_21
+#define A_KEY_BOOT     GPIO_NUM_0
+#define A_GAP_V2       16 // the CO5300's picture starts 16 columns in
+#define EXP_ADDR       0x20 // TCA9554 (V1) / TCAL9534 (V2): panel and touch power and resets
+#define PMU_ADDR       0x34 // AXP2101
+#define RTC_ADDR       0x51 // PCF85063
+
+#define IMU_ADDR  0x6b // QMI8658 (0x6a with its address pin low)
 
 #define LONG_MS   3000 // holding PWR this long powers off
 #define HOLD_MS   500  // from here on a PWR press is a hold, not a play/stop tap
@@ -65,18 +95,127 @@ static temperature_sensor_handle_t s_temp;
 static adc_oneshot_unit_handle_t s_adc;
 static adc_cali_handle_t s_cali;
 static char s_i2c_devs[64];
-static i2c_master_dev_handle_t s_imu;
+static i2c_master_dev_handle_t s_imu, s_pmu;
+static board_info_t s_info = {BOARD_LCD154, "Waveshare ESP32-S3-Touch-LCD-1.54", "", "ST7789 240x240 SPI", "CST816 (0x15)"};
+int g_lcd_w = 240, g_lcd_h = 240;
+static uint8_t s_imu_addr, s_exp_in;
+static int s_gpio_pa = PIN_PA;
+
+#define AMOLED (s_info.id == BOARD_AMOLED18)
+
+const board_info_t *board_info(void)
+{
+    return &s_info;
+}
+
+static esp_err_t reg_read(i2c_master_dev_handle_t d, uint8_t reg, uint8_t *v, size_t n)
+{
+    return d ? i2c_master_transmit_receive(d, &reg, 1, v, n, 50) : ESP_ERR_INVALID_STATE;
+}
+
+static esp_err_t reg_write(i2c_master_dev_handle_t d, uint8_t reg, uint8_t v)
+{
+    uint8_t b[2] = {reg, v};
+    return d ? i2c_master_transmit(d, b, 2, 50) : ESP_ERR_INVALID_STATE;
+}
+
+static i2c_master_dev_handle_t dev_add(uint8_t addr)
+{
+    i2c_device_config_t dev = {.dev_addr_length = I2C_ADDR_BIT_LEN_7, .device_address = addr, .scl_speed_hz = 400000};
+    i2c_master_dev_handle_t h = NULL;
+    return i2c_master_bus_add_device(s_i2c, &dev, &h) == ESP_OK ? h : NULL;
+}
+
+// The AMOLED-1.8 has its I2C bus on GPIO 14/15, which the 1.54 leaves unconnected; with the
+// pull-ups on, a probe there finds nothing on the 1.54 and drives none of its pins. If the
+// AXP2101 answers, the bus stays up for i2c_init().
+static bool find_amoled(void)
+{
+    i2c_master_bus_config_t cfg = {
+        .i2c_port = I2C_NUM_0,
+        .sda_io_num = A_I2C_SDA,
+        .scl_io_num = A_I2C_SCL,
+        .clk_source = I2C_CLK_SRC_DEFAULT,
+        .glitch_ignore_cnt = 7,
+        .flags.enable_internal_pullup = 1,
+    };
+    if (i2c_new_master_bus(&cfg, &s_i2c) != ESP_OK) {
+        return false;
+    }
+    if (i2c_master_probe(s_i2c, PMU_ADDR, 50) == ESP_OK || i2c_master_probe(s_i2c, EXP_ADDR, 50) == ESP_OK) {
+        return true;
+    }
+    i2c_del_master_bus(s_i2c);
+    s_i2c = NULL;
+    gpio_reset_pin(A_I2C_SDA);
+    gpio_reset_pin(A_I2C_SCL);
+    return false;
+}
+
+// Panel power on and the panel's and touch chip's resets let go, through the IO expander,
+// as Waveshare's bring-up does: SD CS high, resets low, then everything high.
+static void amoled_expander(void)
+{
+    i2c_master_dev_handle_t e = dev_add(EXP_ADDR);
+    reg_write(e, 0x03, (uint8_t)~(0x01 | 0x02 | 0x04 | 0x80)); // P0 panel reset, P1 panel power, P2 touch reset, P7 SD CS
+    reg_write(e, 0x01, 0x80);
+    vTaskDelay(pdMS_TO_TICKS(20));
+    reg_write(e, 0x01, 0x01 | 0x02 | 0x04 | 0x80);
+    vTaskDelay(pdMS_TO_TICKS(150));
+    reg_read(e, 0x00, &s_exp_in, 1);
+    if (e) {
+        i2c_master_bus_rm_device(e);
+    }
+}
+
+// The AXP2101 keeps its own rails as the factory set them; this turns on its battery and
+// USB measurements (the TS pin has no thermistor on this board) and the PWR key's events.
+static void amoled_pmu(void)
+{
+    s_pmu = dev_add(PMU_ADDR);
+    uint8_t v = 0;
+    if (reg_read(s_pmu, 0x03, &v, 1) != ESP_OK || v != 0x4a) {
+        ESP_LOGW(TAG, "no AXP2101 (id 0x%02x)", v);
+        return;
+    }
+    if (reg_read(s_pmu, 0x30, &v, 1) == ESP_OK) {
+        reg_write(s_pmu, 0x30, (v | 0x01 | 0x04) & ~0x02); // battery and VBUS voltage, not TS
+    }
+    if (reg_read(s_pmu, 0x68, &v, 1) == ESP_OK) {
+        reg_write(s_pmu, 0x68, v | 0x01); // battery detection
+    }
+    reg_write(s_pmu, 0x41, 0x0c); // INTEN2: PWR key short and long press
+    reg_write(s_pmu, 0x48, 0xff);
+    reg_write(s_pmu, 0x49, 0xff);
+    reg_write(s_pmu, 0x4a, 0xff);
+}
 
 static void power_init(void)
 {
-    gpio_config_t out = {.pin_bit_mask = 1ULL << PIN_BAT_EN | 1ULL << PIN_PA, .mode = GPIO_MODE_OUTPUT};
-    gpio_config(&out);
     gpio_deep_sleep_hold_dis(); // after a deep sleep: take the pins back
-    gpio_hold_dis(PIN_BAT_EN);
-    gpio_set_level(PIN_BAT_EN, 1);
-    gpio_set_level(PIN_PA, 0);
-    gpio_config_t in = {.pin_bit_mask = 1ULL << PIN_CHARGING, .mode = GPIO_MODE_INPUT, .pull_up_en = 1};
-    gpio_config(&in);
+    if (AMOLED) {
+        gpio_config_t out = {.pin_bit_mask = 1ULL << A_PA, .mode = GPIO_MODE_OUTPUT};
+        gpio_config(&out);
+        gpio_set_level(A_PA, 0);
+    } else {
+        gpio_config_t out = {.pin_bit_mask = 1ULL << PIN_BAT_EN | 1ULL << PIN_PA, .mode = GPIO_MODE_OUTPUT};
+        gpio_config(&out);
+        gpio_hold_dis(PIN_BAT_EN);
+        gpio_set_level(PIN_BAT_EN, 1);
+        gpio_set_level(PIN_PA, 0);
+        gpio_config_t in = {.pin_bit_mask = 1ULL << PIN_CHARGING, .mode = GPIO_MODE_INPUT, .pull_up_en = 1};
+        gpio_config(&in);
+    }
+
+    temperature_sensor_config_t tcfg = TEMPERATURE_SENSOR_CONFIG_DEFAULT(-10, 80);
+    if (temperature_sensor_install(&tcfg, &s_temp) == ESP_OK) {
+        temperature_sensor_enable(s_temp);
+    } else {
+        s_temp = NULL;
+    }
+    if (AMOLED) {
+        return; // the battery is the AXP2101's
+    }
 
     adc_oneshot_unit_init_cfg_t unit = {.unit_id = ADC_UNIT_1};
     adc_oneshot_new_unit(&unit, &s_adc);
@@ -87,26 +226,21 @@ static void power_init(void)
     if (adc_cali_create_scheme_curve_fitting(&cali, &s_cali) != ESP_OK) {
         s_cali = NULL;
     }
-
-    temperature_sensor_config_t tcfg = TEMPERATURE_SENSOR_CONFIG_DEFAULT(-10, 80);
-    if (temperature_sensor_install(&tcfg, &s_temp) == ESP_OK) {
-        temperature_sensor_enable(s_temp);
-    } else {
-        s_temp = NULL;
-    }
 }
 
 static void i2c_init(void)
 {
-    i2c_master_bus_config_t cfg = {
-        .i2c_port = I2C_NUM_0,
-        .sda_io_num = PIN_I2C_SDA,
-        .scl_io_num = PIN_I2C_SCL,
-        .clk_source = I2C_CLK_SRC_DEFAULT,
-        .glitch_ignore_cnt = 7,
-        .flags.enable_internal_pullup = 1,
-    };
-    ESP_ERROR_CHECK(i2c_new_master_bus(&cfg, &s_i2c));
+    if (!s_i2c) {
+        i2c_master_bus_config_t cfg = {
+            .i2c_port = I2C_NUM_0,
+            .sda_io_num = PIN_I2C_SDA,
+            .scl_io_num = PIN_I2C_SCL,
+            .clk_source = I2C_CLK_SRC_DEFAULT,
+            .glitch_ignore_cnt = 7,
+            .flags.enable_internal_pullup = 1,
+        };
+        ESP_ERROR_CHECK(i2c_new_master_bus(&cfg, &s_i2c));
+    }
     int pos = 0;
     for (int addr = 0x08; addr < 0x78; addr++) {
         if (i2c_master_probe(s_i2c, addr, 20) == ESP_OK) {
@@ -115,10 +249,18 @@ static void i2c_init(void)
     }
     ESP_LOGI(TAG, "I2C devices: %s", s_i2c_devs);
 
-    i2c_device_config_t dev = {.dev_addr_length = I2C_ADDR_BIT_LEN_7, .device_address = IMU_ADDR, .scl_speed_hz = 400000};
-    uint8_t reg = 0x00, who = 0;
-    if (i2c_master_bus_add_device(s_i2c, &dev, &s_imu) == ESP_OK &&
-        i2c_master_transmit_receive(s_imu, &reg, 1, &who, 1, 50) == ESP_OK && who == 0x05) {
+    if (AMOLED) {
+        amoled_pmu();
+    }
+
+    uint8_t who = 0;
+    s_imu_addr = i2c_master_probe(s_i2c, IMU_ADDR, 20) == ESP_OK ? IMU_ADDR : IMU_ADDR - 1;
+    if ((s_imu = dev_add(s_imu_addr)) && reg_read(s_imu, 0x00, &who, 1) == ESP_OK && who == 0x05) {
+        if (AMOLED) {
+            // left running by the factory firmware, it kept one reading until reset
+            reg_write(s_imu, 0x60, 0xb0);
+            vTaskDelay(pdMS_TO_TICKS(20));
+        }
         // the temperature only updates while a sensor runs: accelerometer at its slowest rate
         uint8_t ctrl1[] = {0x02, 0x40}, ctrl2[] = {0x03, 0x0f}, ctrl7[] = {0x08, 0x01};
         i2c_master_transmit(s_imu, ctrl1, 2, 50);
@@ -126,11 +268,16 @@ static void i2c_init(void)
         i2c_master_transmit(s_imu, ctrl7, 2, 50);
     } else {
         ESP_LOGW(TAG, "no QMI8658 (who=0x%02x)", who);
+        if (s_imu) {
+            i2c_master_bus_rm_device(s_imu);
+        }
         s_imu = NULL;
+        s_imu_addr = 0;
     }
 }
 
-// Speaker only: the ES7210 mics share the I2S port but nothing here uses them.
+// Speaker only: the 1.54's ES7210 mics share the I2S port, and the AMOLED-1.8's mic is on the
+// ES8311 itself, but nothing here uses them.
 static void audio_init(void)
 {
     i2s_chan_handle_t tx;
@@ -147,10 +294,10 @@ static void audio_init(void)
         },
         .slot_cfg = I2S_STD_PHILIPS_SLOT_DEFAULT_CONFIG(I2S_DATA_BIT_WIDTH_16BIT, I2S_SLOT_MODE_STEREO),
         .gpio_cfg = {
-            .mclk = PIN_I2S_MCLK,
-            .bclk = PIN_I2S_BCLK,
-            .ws = PIN_I2S_WS,
-            .dout = PIN_I2S_DOUT,
+            .mclk = AMOLED ? A_I2S_MCLK : PIN_I2S_MCLK,
+            .bclk = AMOLED ? A_I2S_BCLK : PIN_I2S_BCLK,
+            .ws = AMOLED ? A_I2S_WS : PIN_I2S_WS,
+            .dout = AMOLED ? A_I2S_DOUT : PIN_I2S_DOUT,
             .din = I2S_GPIO_UNUSED,
         },
     };
@@ -180,6 +327,9 @@ static void audio_init(void)
 
 static void backlight_init(void)
 {
+    if (AMOLED) {
+        return; // an AMOLED has no backlight: its brightness is a panel command
+    }
     ledc_timer_config_t timer = {
         .speed_mode = LEDC_LOW_SPEED_MODE,
         .duty_resolution = LEDC_TIMER_10_BIT,
@@ -276,6 +426,74 @@ int board_touch_log(touch_log_t *out, int max)
     return k;
 }
 
+// Waveshare's init sequence for both panels (the SH8601 takes the CO5300's commands): 16-bit
+// colour, tearing effect output on, brightness up, the 368x448 window.
+static const co5300_lcd_init_cmd_t s_amoled_init[] = {
+    {0xFE, (uint8_t[]){0x00}, 1, 0},
+    {0xC4, (uint8_t[]){0x80}, 1, 0},
+    {0x3A, (uint8_t[]){0x55}, 1, 0},
+    {0x35, (uint8_t[]){0x00}, 1, 0},
+    {0x53, (uint8_t[]){0x20}, 1, 0},
+    {0x51, (uint8_t[]){0xFF}, 1, 0},
+    {0x63, (uint8_t[]){0xFF}, 1, 0},
+    {0x2A, (uint8_t[]){0x00, 0x00, 0x01, 0x6F}, 4, 0},
+    {0x2B, (uint8_t[]){0x00, 0x00, 0x01, 0xBF}, 4, 0},
+    {0x11, (uint8_t[]){0x00}, 0, 100},
+    {0x29, (uint8_t[]){0x00}, 0, 0},
+};
+
+static uint32_t s_panel_id; // RDDID's three bytes, 0 if it couldn't be read
+
+static void amoled_lcd_init(bool v2)
+{
+    spi_bus_config_t bus = CO5300_PANEL_BUS_QSPI_CONFIG(A_LCD_CLK, A_LCD_D0, A_LCD_D1, A_LCD_D2, A_LCD_D3,
+                                                        LCD_W * 40 * 2);
+    bus.isr_cpu_id = ESP_INTR_CPU_AFFINITY_1; // with the video's draw task, as on the 1.54
+    ESP_ERROR_CHECK(spi_bus_initialize(SPI2_HOST, &bus, SPI_DMA_CH_AUTO));
+    esp_lcd_panel_io_spi_config_t io = CO5300_PANEL_IO_QSPI_CONFIG(A_LCD_CS, NULL, NULL);
+    io.pclk_hz = A_LCD_PCLK_HZ;
+    ESP_ERROR_CHECK(esp_lcd_new_panel_io_spi(SPI2_HOST, &io, &s_lcd_io));
+    co5300_vendor_config_t vendor = {
+        .init_cmds = s_amoled_init,
+        .init_cmds_size = sizeof(s_amoled_init) / sizeof(s_amoled_init[0]),
+        .flags.use_qspi_interface = 1,
+    };
+    esp_lcd_panel_dev_config_t panel = {
+        .reset_gpio_num = -1, // the expander did it
+        .rgb_ele_order = LCD_RGB_ELEMENT_ORDER_RGB,
+        .bits_per_pixel = 16,
+        .vendor_config = &vendor,
+    };
+    ESP_ERROR_CHECK(esp_lcd_new_panel_co5300(s_lcd_io, &panel, &s_panel));
+    esp_lcd_panel_reset(s_panel);
+    esp_lcd_panel_init(s_panel);
+    esp_lcd_panel_set_gap(s_panel, v2 ? A_GAP_V2 : 0, 0);
+    // RDDID, read back on one line
+    uint8_t id[3] = {0};
+    if (esp_lcd_panel_io_rx_param(s_lcd_io, 0x03 << 24 | 0x04 << 8, id, 3) == ESP_OK) {
+        s_panel_id = id[0] << 16 | id[1] << 8 | id[2];
+    }
+    esp_lcd_panel_disp_on_off(s_panel, true);
+
+    esp_lcd_panel_io_handle_t tp_io;
+    esp_lcd_panel_io_i2c_config_t tp_io_cfg = v2 ? (esp_lcd_panel_io_i2c_config_t)ESP_LCD_TOUCH_IO_I2C_CST816S_CONFIG()
+                                                 : (esp_lcd_panel_io_i2c_config_t)ESP_LCD_TOUCH_IO_I2C_FT5x06_CONFIG();
+    tp_io_cfg.scl_speed_hz = 100000;
+    ESP_ERROR_CHECK(esp_lcd_new_panel_io_i2c(s_i2c, &tp_io_cfg, &tp_io));
+    esp_lcd_touch_config_t tp = {
+        .x_max = LCD_W,
+        .y_max = LCD_H,
+        .rst_gpio_num = -1, // the expander did it
+        .int_gpio_num = A_TP_INT,
+        .process_coordinates = touch_map,
+    };
+    esp_err_t err = v2 ? esp_lcd_touch_new_i2c_cst816s(tp_io, &tp, &s_touch) : esp_lcd_touch_new_i2c_ft5x06(tp_io, &tp, &s_touch);
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "touch failed");
+        s_touch = NULL;
+    }
+}
+
 static void lcd_init(void)
 {
     spi_bus_config_t bus = {
@@ -334,6 +552,9 @@ static void lcd_init(void)
 // register writes its driver makes on stop (mics, analog part and clocks off) put it to sleep.
 static void mics_sleep(void)
 {
+    if (AMOLED) {
+        return; // no ES7210
+    }
     i2c_device_config_t dev = {.dev_addr_length = I2C_ADDR_BIT_LEN_7, .device_address = 0x40, .scl_speed_hz = 100000};
     i2c_master_dev_handle_t es7210;
     if (i2c_master_bus_add_device(s_i2c, &dev, &es7210) != ESP_OK) {
@@ -349,11 +570,26 @@ static void mics_sleep(void)
 
 void board_init(void)
 {
+    if (find_amoled()) {
+        // V2 swapped the panel and the touch chip: its CST816 answers at 0x15, V1's FT3168 at 0x38
+        amoled_expander();
+        bool v2 = i2c_master_probe(s_i2c, 0x15, 50) == ESP_OK;
+        s_info = (board_info_t){BOARD_AMOLED18, "Waveshare ESP32-S3-Touch-AMOLED-1.8", v2 ? "V2" : "V1",
+                                v2 ? "CO5300 368x448 QSPI" : "SH8601 368x448 QSPI", v2 ? "CST816 (0x15)" : "FT3168 (0x38)"};
+        g_lcd_w = 368;
+        g_lcd_h = 448;
+        s_gpio_pa = A_PA;
+    }
+    ESP_LOGI(TAG, "%s %s", s_info.name, s_info.rev);
     power_init();
     i2c_init();
     mics_sleep();
     backlight_init();
-    lcd_init();
+    if (AMOLED) {
+        amoled_lcd_init(!strcmp(s_info.rev, "V2"));
+    } else {
+        lcd_init();
+    }
     audio_init();
 }
 
@@ -364,7 +600,7 @@ esp_codec_dev_handle_t board_speaker(void)
 
 void board_amp(bool on)
 {
-    gpio_set_level(PIN_PA, on);
+    gpio_set_level(s_gpio_pa, on);
 }
 
 esp_lcd_panel_io_handle_t board_lcd_io(void)
@@ -393,6 +629,12 @@ void board_backlight(int percent)
 {
     percent = percent < 0 ? 0 : percent > 100 ? 100 : percent;
     s_backlight = percent;
+    if (AMOLED) {
+        if (s_panel) {
+            esp_lcd_panel_co5300_set_brightness(s_panel, percent);
+        }
+        return;
+    }
     ledc_set_duty(LEDC_LOW_SPEED_MODE, LEDC_CHANNEL_0, percent * 1023 / 100);
     ledc_update_duty(LEDC_LOW_SPEED_MODE, LEDC_CHANNEL_0);
 }
@@ -402,19 +644,39 @@ void board_backlight(int percent)
 static key_fn s_key_fn;
 static volatile int s_held_ms;
 
+// The AMOLED-1.8's PWR key belongs to the AXP2101, which tells of a short press (a long one
+// powers the board off by itself); BOOT does all the 1.54's PWR does.
+static bool pmu_key_short(void)
+{
+    uint8_t st = 0;
+    if (reg_read(s_pmu, 0x49, &st, 1) != ESP_OK || !(st & 0x0c)) {
+        return false;
+    }
+    reg_write(s_pmu, 0x49, st & 0x0c);
+    return st & 0x08;
+}
+
 static void keys_task(void *arg)
 {
-    static const gpio_num_t pins[3] = {PIN_KEY_POWER, PIN_KEY_UP, PIN_KEY_DOWN};
+    gpio_num_t pins[3] = {PIN_KEY_POWER, PIN_KEY_UP, PIN_KEY_DOWN};
+    int nkeys = 3;
+    if (AMOLED) {
+        pins[0] = A_KEY_BOOT;
+        nkeys = 1;
+    }
     int held_ms[3] = {0};
     bool long_sent[3] = {0};
     // a key held at boot (BOOT is GPIO0) must be released before it counts
     bool armed[3];
-    for (int i = 0; i < 3; i++) {
+    for (int i = 0; i < nkeys; i++) {
         armed[i] = gpio_get_level(pins[i]) == 1;
     }
     while (true) {
         vTaskDelay(pdMS_TO_TICKS(20));
-        for (int i = 0; i < 3; i++) {
+        if (AMOLED && pmu_key_short()) {
+            s_key_fn(KEY_POWER, PRESS_SHORT);
+        }
+        for (int i = 0; i < nkeys; i++) {
             bool down = gpio_get_level(pins[i]) == 0;
             if (!armed[i]) {
                 armed[i] = !down;
@@ -455,7 +717,7 @@ void board_keys_start(key_fn fn)
 {
     s_key_fn = fn;
     gpio_config_t in = {
-        .pin_bit_mask = 1ULL << PIN_KEY_POWER | 1ULL << PIN_KEY_UP | 1ULL << PIN_KEY_DOWN,
+        .pin_bit_mask = AMOLED ? 1ULL << A_KEY_BOOT : 1ULL << PIN_KEY_POWER | 1ULL << PIN_KEY_UP | 1ULL << PIN_KEY_DOWN,
         .mode = GPIO_MODE_INPUT,
         .pull_up_en = 1,
     };
@@ -490,8 +752,36 @@ static int battery_pct(int mv, const int *mvs, const int *pcts)
     return pcts[10];
 }
 
+// The AXP2101's own fuel gauge, voltage and charger state
+static void pmu_battery(battery_t *out)
+{
+    uint8_t st[2] = {0}, v[2] = {0}, pct = 0;
+    *out = (battery_t){0};
+    if (reg_read(s_pmu, 0x00, st, 2) != ESP_OK) {
+        return;
+    }
+    out->usb = (st[0] & 0x20) || usb_serial_jtag_is_connected(); // VBUS good
+    out->charging = (st[1] >> 5) == 1;
+    if (!(st[0] & 0x08)) {
+        return; // no battery
+    }
+    if (reg_read(s_pmu, 0x34, v, 2) == ESP_OK) {
+        out->mv = (v[0] & 0x1f) << 8 | v[1];
+    }
+    if (reg_read(s_pmu, 0xa4, &pct, 1) == ESP_OK) {
+        out->percent = pct > 100 ? 100 : pct;
+    }
+    if (out->charging && out->percent > 99) {
+        out->percent = 99;
+    }
+}
+
 void board_battery(battery_t *out)
 {
+    if (AMOLED) {
+        pmu_battery(out);
+        return;
+    }
     out->charging = gpio_get_level(PIN_CHARGING) == 0;
     out->usb = out->charging || usb_serial_jtag_is_connected();
     out->mv = 0;
@@ -559,6 +849,9 @@ int board_rotation(void)
 bool board_rotation_apply(void)
 {
     int r = s_rot_want;
+    if (LCD_W != LCD_H) {
+        r = 0; // a quarter turn changes the screen's shape, which the UI can't follow yet
+    }
     if (r == s_rot || !s_panel) {
         return false;
     }
@@ -601,8 +894,8 @@ void board_turn_in_place(uint16_t *p, int w, int h, int rot)
         return;
     }
     // a quarter turn: each pixel moves along its cycle of the permutation, once
-    static uint32_t done[(LCD_W * 20 + 31) / 32];
-    if (rot == 0 || n > LCD_W * 20) {
+    static uint32_t done[(LCD_MAX_W * 20 + 31) / 32];
+    if (rot == 0 || n > LCD_MAX_W * 20) {
         return;
     }
     memset(done, 0, (n + 31) / 32 * 4);
@@ -636,6 +929,9 @@ float board_imu_temp(void)
 
 bool board_panel_gamma(float gamma)
 {
+    if (AMOLED) {
+        return false; // no built-in curves to pick from
+    }
     // GAMSET picks one of the ST7789's four built-in curves
     uint8_t sel = gamma < 1.4f ? 0x08 : gamma < 2.0f ? 0x02 : gamma < 2.35f ? 0x01 : 0x04;
     return esp_lcd_panel_io_tx_param(s_lcd_io, 0x26, &sel, 1) == ESP_OK;
@@ -650,6 +946,30 @@ const char *board_i2c_devices(void)
 void board_power_off(unsigned wake_s)
 {
     board_backlight(0);
+    if (AMOLED) {
+        esp_lcd_panel_disp_on_off(s_panel, false);
+        esp_lcd_panel_disp_sleep(s_panel, true);
+        battery_t b;
+        pmu_battery(&b);
+        if (wake_s == 0 && !b.usb) {
+            uint8_t v = 0;
+            reg_read(s_pmu, 0x10, &v, 1);
+            reg_write(s_pmu, 0x10, v | 0x01); // the AXP2101 cuts all power; PWR starts it again
+            vTaskDelay(pdMS_TO_TICKS(500));
+        }
+        // on USB power, or to wake by itself: deep sleep until BOOT (or the timer)
+        for (int i = 0; i < 100 && gpio_get_level(A_KEY_BOOT) == 0; i++) {
+            vTaskDelay(pdMS_TO_TICKS(50));
+        }
+        vTaskDelay(pdMS_TO_TICKS(200));
+        rtc_gpio_pullup_en(A_KEY_BOOT);
+        rtc_gpio_pulldown_dis(A_KEY_BOOT);
+        esp_sleep_enable_ext1_wakeup_io(1ULL << A_KEY_BOOT, ESP_EXT1_WAKEUP_ANY_LOW);
+        if (wake_s) {
+            esp_sleep_enable_timer_wakeup((uint64_t)wake_s * 1000000ULL);
+        }
+        esp_deep_sleep_start();
+    }
     if (wake_s == 0) {
         gpio_set_level(PIN_BAT_EN, 0);
     } // else keep the latch: only a deep sleep can wake itself up again
@@ -669,4 +989,96 @@ void board_power_off(unsigned wake_s)
         gpio_deep_sleep_hold_en();
     }
     esp_deep_sleep_start();
+}
+
+// ---------------------------------------------------------------- chips
+
+static int addf(char *buf, size_t len, int pos, const char *fmt, ...) __attribute__((format(printf, 4, 5)));
+static int addf(char *buf, size_t len, int pos, const char *fmt, ...)
+{
+    if (pos >= (int)len) {
+        return pos;
+    }
+    va_list ap;
+    va_start(ap, fmt);
+    pos += vsnprintf(buf + pos, len - pos, fmt, ap);
+    va_end(ap);
+    return pos;
+}
+
+// Reads one register of the chip at addr; -1 if it doesn't answer.
+static int peek(uint8_t addr, uint8_t reg)
+{
+    i2c_master_dev_handle_t d = dev_add(addr);
+    uint8_t v = 0;
+    esp_err_t err = reg_read(d, reg, &v, 1);
+    if (d) {
+        i2c_master_bus_rm_device(d);
+    }
+    return err == ESP_OK ? v : -1;
+}
+
+// One chip as a JSON object: its part, what it does, where it sits (addr -1: not on I2C), what
+// identified it, and whether it answered.
+static int chip(char *buf, size_t len, int pos, const char *part, const char *role, int addr, const char *id, bool ok)
+{
+    char a[8] = "";
+    if (addr >= 0) {
+        snprintf(a, sizeof(a), "0x%02x", addr);
+    }
+    return addf(buf, len, pos, "%s{\"part\":\"%s\",\"role\":\"%s\",\"addr\":\"%s\",\"id\":\"%s\",\"ok\":%s}",
+                pos > 1 ? "," : "", part, role, a, id, ok ? "true" : "false");
+}
+
+void board_chips_json(char *buf, size_t len)
+{
+    char id[48];
+    int pos = addf(buf, len, 0, "[");
+    esp_chip_info_t ci;
+    esp_chip_info(&ci);
+    uint32_t flash = 0;
+    esp_flash_get_size(NULL, &flash);
+    uint8_t mac[6] = {0};
+    esp_efuse_mac_get_default(mac);
+    snprintf(id, sizeof(id), "rev v%d.%d, %lu MB flash, %u MB PSRAM", ci.revision / 100, ci.revision % 100,
+             (unsigned long)(flash >> 20), (unsigned)(esp_psram_get_size() >> 20));
+    pos = chip(buf, len, pos, "ESP32-S3", "processor, Wi-Fi", -1, id, true);
+    snprintf(id, sizeof(id), "MAC %02x:%02x:%02x:%02x:%02x:%02x", mac[0], mac[1], mac[2], mac[3], mac[4], mac[5]);
+    pos = chip(buf, len, pos, "Wi-Fi", "station", -1, id, true);
+    if (AMOLED) {
+        bool v2 = !strcmp(s_info.rev, "V2");
+        bool read = s_panel_id && s_panel_id != 0xffffff; // with nothing driving the line back it reads all ones
+        snprintf(id, sizeof(id), read ? "RDDID %06lx" : "answers its init; its ID doesn't read back over QSPI",
+                 (unsigned long)s_panel_id);
+        pos = chip(buf, len, pos, v2 ? "CO5300" : "SH8601", "AMOLED driver, 368x448, QSPI", -1, id, s_panel != NULL);
+        int t = peek(v2 ? 0x15 : 0x38, v2 ? 0xa7 : 0xa3);
+        snprintf(id, sizeof(id), t >= 0 ? "chip ID 0x%02x" : "no answer", t);
+        pos = chip(buf, len, pos, v2 ? "CST816" : "FT3168", "touch", v2 ? 0x15 : 0x38, id, t >= 0);
+        int p = peek(PMU_ADDR, 0x03);
+        snprintf(id, sizeof(id), p >= 0 ? "IC type 0x%02x" : "no answer", p);
+        pos = chip(buf, len, pos, "AXP2101", "power, battery charger, PWR key", PMU_ADDR, id, p == 0x4a);
+        int e = peek(EXP_ADDR, 0x03);
+        snprintf(id, sizeof(id), e >= 0 ? "direction 0x%02x, inputs 0x%02x at boot" : "no answer", e, s_exp_in);
+        pos = chip(buf, len, pos, v2 ? "TCAL9534" : "TCA9554", "IO expander: panel power and resets", EXP_ADDR, id, e >= 0);
+        int r = peek(RTC_ADDR, 0x04);
+        // bit 7 of the seconds: the oscillator stopped since the clock was last set
+        snprintf(id, sizeof(id), r < 0 ? "no answer" : r & 0x80 ? "running, %02x s, not set" : "running, %02x s", r & 0x7f);
+        pos = chip(buf, len, pos, "PCF85063", "real-time clock", RTC_ADDR, id, r >= 0);
+    } else {
+        pos = chip(buf, len, pos, "ST7789", "LCD driver, 240x240, SPI", -1, "", s_panel != NULL);
+        int t = peek(0x15, 0xa7);
+        snprintf(id, sizeof(id), t >= 0 ? "chip ID 0x%02x" : "no answer", t);
+        pos = chip(buf, len, pos, "CST816", "touch", 0x15, id, t >= 0);
+        int m = peek(0x40, 0xfd);
+        snprintf(id, sizeof(id), m >= 0 ? "chip ID 0x%02x" : "no answer", m);
+        pos = chip(buf, len, pos, "ES7210", "microphone ADC (unused)", 0x40, id, m >= 0);
+    }
+    int c1 = peek(0x18, 0xfd), c2 = peek(0x18, 0xfe);
+    snprintf(id, sizeof(id), c1 >= 0 ? "chip ID %02x%02x" : "no answer", c1, c2);
+    pos = chip(buf, len, pos, "ES8311", AMOLED ? "audio codec: speaker (and mic, unused)" : "audio codec: speaker", 0x18, id,
+               c1 == 0x83);
+    int w = s_imu_addr ? peek(s_imu_addr, 0x00) : -1, rv = s_imu_addr ? peek(s_imu_addr, 0x01) : -1;
+    snprintf(id, sizeof(id), w >= 0 ? "WHO_AM_I 0x%02x, revision 0x%02x" : "no answer", w, rv);
+    pos = chip(buf, len, pos, "QMI8658", "motion sensor", s_imu_addr ? s_imu_addr : IMU_ADDR, id, w == 0x05);
+    addf(buf, len, pos, "]");
 }

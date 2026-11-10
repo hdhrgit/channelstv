@@ -43,6 +43,10 @@ void bridge_set_override(const char *host_port);
 // centre 4:3 of the picture, 240x192, with the bridge's w, h and fit overrides). Saved in NVS.
 const char *bridge_picture(void);
 void bridge_set_picture(const char *shape);
+// The picture size the board asks the bridge for (0 x 0: the profile's), and a different one
+// to try until the next restart.
+void bridge_size(int *w, int *h);
+void bridge_set_size(int w, int h);
 
 typedef struct {
     char id[80];

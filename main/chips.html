@@ -1,0 +1,94 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>channelstv chips</title>
+<style>
+  :root { --bg:#fff; --fg:#1d2330; --muted:#5d6678; --line:#d9dde5; --card:#f6f7f9; --accent:#2457d6; --bad:#b3261e; --good:#1b7a3b; }
+  @media (prefers-color-scheme: dark) { :root { --bg:#14171d; --fg:#e6e9ef; --muted:#9aa3b5; --line:#2c323d; --card:#1b1f27; --accent:#7aa2ff; --bad:#ff8a80; --good:#6fd28d; } }
+  * { box-sizing: border-box; }
+  body { margin:0; background:var(--bg); color:var(--fg); font:15px/1.45 system-ui, sans-serif; }
+  main { max-width:760px; margin:0 auto; padding:16px; }
+  h1 { font-size:20px; margin:0 0 12px; }
+  h2 { font-size:15px; margin:20px 0 8px; color:var(--muted); font-weight:600; }
+  a { color:var(--accent); }
+  .card { background:var(--card); border:1px solid var(--line); border-radius:10px; padding:12px 14px; }
+  dl { display:grid; grid-template-columns:max-content 1fr; gap:4px 14px; margin:0; }
+  dt { color:var(--muted); }
+  dd { margin:0; overflow-wrap:anywhere; }
+  .scroll { overflow-x:auto; }
+  table { border-collapse:collapse; width:100%; }
+  th, td { text-align:left; padding:6px 8px; border-bottom:1px solid var(--line); vertical-align:top; }
+  th { color:var(--muted); font-weight:600; }
+  tr:last-child td { border-bottom:0; }
+  td.addr { font-family:ui-monospace, monospace; white-space:nowrap; }
+  .bad { color:var(--bad); } .good { color:var(--good); }
+  .hint { color:var(--muted); font-size:13px; margin-top:6px; }
+  @media (max-width:520px) { .role { display:none; } }
+</style>
+</head>
+<body>
+<main>
+<h1>Board and chips</h1>
+<div class="card"><dl id="board"><dt>Board</dt><dd>loading...</dd></dl></div>
+
+<h2>Chips</h2>
+<div class="card scroll">
+  <table>
+    <thead><tr><th>Part</th><th class="role">What it does</th><th>I2C</th><th>ID</th><th></th></tr></thead>
+    <tbody id="chips"></tbody>
+  </table>
+  <div class="hint" id="i2c"></div>
+</div>
+
+<h2>Now</h2>
+<div class="card"><dl id="now"></dl></div>
+<div class="hint"><a href="/">Back to the status page</a></div>
+</main>
+<script>
+const $ = id => document.getElementById(id);
+const esc = s => String(s).replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+function rows(el, pairs) {
+  el.innerHTML = pairs.map(([k, v]) => `<dt>${esc(k)}</dt><dd>${v}</dd>`).join('');
+}
+let chipsShown = false;
+async function load() {
+  let d;
+  try {
+    d = await (await fetch('/api/chips', {cache: 'no-store'})).json();
+  } catch (e) {
+    rows($('board'), [['Board', '<span class="bad">no answer from the board</span>']]);
+    return;
+  }
+  const b = d.board || {};
+  rows($('board'), [
+    ['Board', esc(b.name || '?')],
+    ['Version', b.rev ? esc(b.rev) : 'only one'],
+    ['Display', esc(b.display || '?')],
+    ['Touch', esc(b.touch || '?')],
+    ['Screen', `${d.screen_w} x ${d.screen_h}`],
+  ]);
+  if (!chipsShown) { // the IDs are read once; the readings below refresh
+    chipsShown = true;
+    $('chips').innerHTML = (d.chips || []).map(c => `<tr><td>${esc(c.part)}</td><td class="role">${esc(c.role)}</td>` +
+      `<td class="addr">${esc(c.addr || '-')}</td><td>${esc(c.id)}</td>` +
+      `<td class="${c.ok ? 'good' : 'bad'}">${c.ok ? 'ok' : 'missing'}</td></tr>`).join('');
+    $('i2c').textContent = 'Answered on the I2C bus at boot: ' + (d.i2c || 'nothing');
+  }
+  const bat = d.battery || {};
+  const t = d.touch || {};
+  const last = (t.points || []).slice(-1)[0];
+  rows($('now'), [
+    ['Motion', d.accel_g ? `x ${d.accel_g[0].toFixed(2)} g, y ${d.accel_g[1].toFixed(2)} g, z ${d.accel_g[2].toFixed(2)} g` : '<span class="bad">no reading</span>'],
+    ['Temperature', `sensor ${d.imu_temp_c} °C, processor ${d.chip_temp_c} °C`],
+    ['Battery', bat.mv ? `${(bat.mv / 1000).toFixed(2)} V, ${bat.percent}%${bat.charging ? ', charging' : ''}` : 'none'],
+    ['USB power', bat.usb ? 'yes' : 'no'],
+    ['Last touch', last ? (last[3] < 0 ? `lifted at ${last[1]}, ${last[2]}` : `${last[3]}, ${last[4]} (raw ${last[1]}, ${last[2]})`) : 'none yet'],
+  ]);
+}
+load();
+setInterval(() => { if (!document.hidden) load(); }, 1000);
+</script>
+</body>
+</html>

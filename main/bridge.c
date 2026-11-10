@@ -1,6 +1,7 @@
 // Finding and browsing the bridge, see bridge.h.
 
 #include "bridge.h"
+#include "board.h"
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -97,6 +98,23 @@ void bridge_set_picture(const char *shape)
 {
     s_4x3 = !strcmp(shape, "4x3");
     nvs_put("picture", bridge_picture());
+}
+
+// The picture size asked of the bridge on a panel bigger than the profile's 240 wide (0: the
+// profile's own), until a restart.
+static int s_pic_w, s_pic_h;
+
+void bridge_set_size(int w, int h)
+{
+    s_pic_w = w > 0 && w <= LCD_W ? w & ~1 : 0;
+    s_pic_h = h > 0 && h <= LCD_H ? h & ~1 : 0;
+}
+
+void bridge_size(int *w, int *h)
+{
+    bool big = LCD_W > 240;
+    *w = s_pic_w ? s_pic_w : big ? 320 : 0;
+    *h = s_pic_h ? s_pic_h : big ? (s_4x3 ? 240 : 180) : 0;
 }
 
 // ---------------------------------------------------------------- HTTP
@@ -587,7 +605,12 @@ static void with_profile(const char *url, char *out, size_t len)
     if (!strstr(url, "profile=")) {
         snprintf(out, len, "%s%cprofile=" PROFILE, url, strchr(url, '?') ? '&' : '?');
     }
-    if (s_4x3 && !strstr(out, "fit=")) {
+    int w, h;
+    bridge_size(&w, &h);
+    if (w && h && !strstr(out, "fit=")) {
+        size_t n = strlen(out);
+        snprintf(out + n, len - n, "%cw=%d&h=%d&fit=%s", strchr(out, '?') ? '&' : '?', w, h, s_4x3 ? "crop43" : "scale");
+    } else if (s_4x3 && !strstr(out, "fit=")) {
         size_t n = strlen(out);
         snprintf(out + n, len - n, "%c" OVERRIDES_4X3, strchr(out, '?') ? '&' : '?');
     }

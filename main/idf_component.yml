@@ -7,3 +7,5 @@ dependencies:
   espressif/esp_lcd_touch_cst816s: ^1.0.6
   lvgl/lvgl: '~9.3.0'
   espressif/esp_h264: '*'
+  espressif/esp_lcd_co5300: ^2.2.0
+  espressif/esp_lcd_touch_ft5x06: ^1.1.1

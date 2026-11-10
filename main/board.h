@@ -1,5 +1,9 @@
-// Waveshare ESP32-S3-Touch-LCD-1.54: 240x240 ST7789 on SPI, CST816 touch and ES8311
-// speaker codec on one I2C bus, three keys, a battery behind a latching power switch.
+// The boards, told apart at boot (board_init):
+// - Waveshare ESP32-S3-Touch-LCD-1.54: 240x240 ST7789 on SPI, CST816 touch and ES8311 speaker
+//   codec on one I2C bus, three keys, a battery behind a latching power switch.
+// - Waveshare ESP32-S3-Touch-AMOLED-1.8: 368x448 AMOLED on QSPI (V1: SH8601 with FT3168 touch,
+//   V2: CO5300 with CST816 touch), ES8311, an AXP2101 power chip with the battery and the PWR
+//   key, BOOT as the only other key.
 #pragma once
 
 #include <stdbool.h>
@@ -10,8 +14,11 @@
 #include "esp_lcd_panel_io.h"
 #include "esp_lcd_panel_ops.h"
 
-#define LCD_W 240
-#define LCD_H 240
+// The panel's size, set by board_init()
+extern int g_lcd_w, g_lcd_h;
+#define LCD_W g_lcd_w
+#define LCD_H g_lcd_h
+#define LCD_MAX_W 368 // the widest of the boards' panels
 #define SAMPLE_RATE 44100
 
 typedef enum { KEY_POWER, KEY_VOL_UP, KEY_VOL_DOWN } board_key_t;
@@ -45,7 +52,20 @@ typedef struct {
 } touch_log_t;
 int board_touch_log(touch_log_t *out, int max);
 
-// Keeps the board powered on battery, then brings up I2C, the codec and the LCD.
+typedef enum { BOARD_LCD154, BOARD_AMOLED18 } board_id_t;
+typedef struct {
+    board_id_t id;
+    const char *name;    // "Waveshare ESP32-S3-Touch-AMOLED-1.8"
+    const char *rev;     // "V2", or "" where there is only one
+    const char *display; // "CO5300 368x448 QSPI"
+    const char *touch;   // "CST816 (0x15)"
+} board_info_t;
+const board_info_t *board_info(void);
+// The chips found at boot with their IDs, as a JSON array, for /api/chips.
+void board_chips_json(char *buf, size_t len);
+
+// Finds out which board this is, keeps it powered on battery, then brings up I2C, the codec
+// and the LCD.
 void board_init(void);
 esp_codec_dev_handle_t board_speaker(void);
 void board_amp(bool on);
@@ -96,7 +116,7 @@ static inline board_turn_t board_turn(int w, int h, int rot, int first, int line
 void board_turn_rect(int x, int y, int w, int h, int rot, int *px, int *py);
 // Rows [first, first + lines) of a w x h RGB565 image turned rot, into dst.
 void board_turn_rows(const uint16_t *src, int w, int h, int rot, int first, int lines, uint16_t *dst);
-// A w x h RGB565 block turned rot in place (w * h at most LCD_W * 20).
+// A w x h RGB565 block turned rot in place (w * h at most LCD_MAX_W * 20).
 void board_turn_in_place(uint16_t *p, int w, int h, int rot);
 // The panel's gamma curve: 1.0, 1.8, 2.2 (the power-on default) or 2.5; the nearest is used.
 // Call with the LVGL lock held, so it doesn't land in the middle of a frame.

@@ -278,7 +278,7 @@ static void draw_task(void *arg)
                     memset(banner_dma, 0, LCD_W * BANNER_H * 2);
                 }
                 // in the bar under the picture
-                int y = (LCD_H + s_pic_h) / 2 + ((LCD_H - s_pic_h) / 2 - BANNER_H) / 2, px, py;
+                int y = ((LCD_H + s_pic_h) / 2 + ((LCD_H - s_pic_h) / 2 - BANNER_H) / 2) & ~1, px, py;
                 board_turn_rect(0, y, LCD_W, BANNER_H, rot, &px, &py);
                 int pw = rot & 1 ? BANNER_H : LCD_W, ph = rot & 1 ? LCD_W : BANNER_H;
                 esp_lcd_panel_draw_bitmap(panel, px, py, px + pw, py + ph, banner_dma);

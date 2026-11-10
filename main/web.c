@@ -2,6 +2,7 @@
 
 #include "web.h"
 
+#include <math.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -30,6 +31,7 @@
 
 extern const char index_html[] asm("_binary_index_html_start");
 extern const char setup_html[] asm("_binary_setup_html_start");
+extern const char chips_html[] asm("_binary_chips_html_start");
 
 // key=... of a query string or form body, percent-decoded into out; false if it isn't there.
 static bool form_str(const char *q, const char *key, char *out, size_t len)
@@ -131,6 +133,55 @@ static void add_touch(cJSON *root)
     }
 }
 
+static void add_board(cJSON *root)
+{
+    const board_info_t *bi = board_info();
+    cJSON *b = cJSON_AddObjectToObject(root, "board");
+    cJSON_AddStringToObject(b, "name", bi->name);
+    cJSON_AddStringToObject(b, "rev", bi->rev);
+    cJSON_AddStringToObject(b, "display", bi->display);
+    cJSON_AddStringToObject(b, "touch", bi->touch);
+}
+
+// The board, its chips and what they read now, for the chips page.
+static esp_err_t chips(httpd_req_t *req)
+{
+    cJSON *root = cJSON_CreateObject();
+    add_board(root);
+    char *buf = malloc(3072);
+    if (buf) {
+        board_chips_json(buf, 3072);
+        cJSON_AddItemToObject(root, "chips", cJSON_Parse(buf));
+        free(buf);
+    }
+    cJSON_AddStringToObject(root, "i2c", board_i2c_devices());
+    float a[3];
+    if (board_accel(&a[0], &a[1], &a[2])) {
+        cJSON *acc = cJSON_AddArrayToObject(root, "accel_g");
+        for (int i = 0; i < 3; i++) {
+            cJSON_AddItemToArray(acc, cJSON_CreateNumber(round(a[i] * 100.0) / 100));
+        }
+    }
+    cJSON_AddNumberToObject(root, "imu_temp_c", round(board_imu_temp() * 10.0) / 10);
+    cJSON_AddNumberToObject(root, "chip_temp_c", round(board_chip_temp() * 10.0) / 10);
+    battery_t bat;
+    board_battery(&bat);
+    cJSON *b = cJSON_AddObjectToObject(root, "battery");
+    cJSON_AddNumberToObject(b, "mv", bat.mv);
+    cJSON_AddNumberToObject(b, "percent", bat.percent);
+    cJSON_AddBoolToObject(b, "charging", bat.charging);
+    cJSON_AddBoolToObject(b, "usb", bat.usb);
+    cJSON_AddNumberToObject(root, "screen_w", LCD_W);
+    cJSON_AddNumberToObject(root, "screen_h", LCD_H);
+    add_touch(root);
+    return send_json(req, root);
+}
+
+static esp_err_t chips_page(httpd_req_t *req)
+{
+    return send_page(req, chips_html);
+}
+
 static esp_err_t status(httpd_req_t *req)
 {
     cJSON *root = cJSON_CreateObject();
@@ -138,6 +189,7 @@ static esp_err_t status(httpd_req_t *req)
     cJSON_AddStringToObject(root, "idf", esp_app_get_description()->idf_ver);
     cJSON_AddNumberToObject(root, "uptime_s", esp_timer_get_time() / 1000000);
     cJSON_AddStringToObject(root, "reset_reason", app_reset_reason());
+    add_board(root);
     const esp_partition_t *run = esp_ota_get_running_partition();
     cJSON_AddStringToObject(root, "partition", run ? run->label : "");
     cJSON_AddBoolToObject(root, "ota_enabled", app_ota_enabled());
@@ -186,6 +238,11 @@ static esp_err_t settings(httpd_req_t *req)
     if (query_str(req, "picture", v, sizeof(v))) {
         bridge_set_picture(v);
     }
+    if (query_str(req, "size", v, sizeof(v))) {
+        int w = 0, h = 0;
+        sscanf(v, "%dx%d", &w, &h); // "320x180"; "0x0": the board's own
+        bridge_set_size(w, h);
+    }
     int vol = query_int(req, "volume", -1);
     if (vol >= 0) {
         app_set_volume(vol);
@@ -204,6 +261,11 @@ static esp_err_t settings(httpd_req_t *req)
     cJSON *root = cJSON_CreateObject();
     cJSON_AddStringToObject(root, "bridge", bridge_override());
     cJSON_AddStringToObject(root, "picture", bridge_picture());
+    int pw, ph;
+    bridge_size(&pw, &ph);
+    char size[16];
+    snprintf(size, sizeof(size), "%dx%d", pw, ph);
+    cJSON_AddStringToObject(root, "size", size);
     cJSON_AddNumberToObject(root, "volume", app_volume());
     cJSON_AddNumberToObject(root, "brightness", ui_brightness());
     if (!ui_dim_seconds()) {
@@ -648,6 +710,8 @@ void web_apply(void)
     } uris[] = {
         {"/", HTTP_GET, {page, ANYONE}}, // the setup page while the hotspot is open
         {"/api/status", HTTP_GET, {status, ANYONE}},
+        {"/chips", HTTP_GET, {chips_page, ANYONE}},
+        {"/api/chips", HTTP_GET, {chips, ANYONE}},
         {"/api/ota", HTTP_POST, {ota, OTA_SWITCH}},
         {"/wifi", HTTP_GET, {wifi_page, SETUP}},
         {"/api/wifi", HTTP_GET, {wifi_state, SETUP}},

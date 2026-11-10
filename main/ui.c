@@ -1920,6 +1920,17 @@ static void build_screen(lv_obj_t *scr)
 // is turned in its own buffer, with its area, on the way to the panel.
 static lv_display_flush_cb_t s_port_flush;
 
+// The AMOLED panels take only windows that start on an even column and row and are an even
+// number wide and high.
+static void round_even(lv_event_t *e)
+{
+    lv_area_t *a = lv_event_get_param(e);
+    a->x1 &= ~1;
+    a->y1 &= ~1;
+    a->x2 |= 1;
+    a->y2 |= 1;
+}
+
 static void flush_turned(lv_display_t *d, const lv_area_t *a, uint8_t *px)
 {
     int rot = board_rotation();
@@ -1956,6 +1967,9 @@ void ui_start(void)
         .flags = {.buff_dma = true, .swap_bytes = true},
     };
     lv_display_t *d = lvgl_port_add_disp(&disp);
+    if (board_info()->id == BOARD_AMOLED18) {
+        lv_display_add_event_cb(d, round_even, LV_EVENT_INVALIDATE_AREA, NULL);
+    }
     s_port_flush = d->flush_cb;
     lv_display_set_flush_cb(d, flush_turned);
     if (board_touch()) {
