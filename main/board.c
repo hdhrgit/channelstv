@@ -460,7 +460,7 @@ static void IRAM_ATTR te_isr(void *arg)
     s_te_count++;
 }
 
-static volatile bool s_te_sync; // off until a restart seen with it on is understood
+static volatile bool s_te_sync = true;
 
 void board_set_te_sync(bool on)
 {
