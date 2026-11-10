@@ -220,8 +220,8 @@ static void on_key(board_key_t key, press_t press)
         static int64_t last_us;
         static int zeros, dir;
         int64_t now = esp_timer_get_time();
-        if (now - last_us > 400000) {
-            zeros = 0; // a new hold (the steps come every 250 ms)
+        if (now - last_us > 800000) {
+            zeros = 0; // a new hold (the steps come every 500 ms)
             dir = -5;
         }
         last_us = now;
