@@ -71,6 +71,7 @@ static void (*volatile s_hook)(void *);   // tv_call_locked(): run by the decode
 static void *volatile s_hook_arg;
 static int s_shown, s_dropped;
 static float s_decode_ms, s_draw_ms, s_fps;
+static volatile float s_frame_conv_ms, s_frame_draw_ms; // the last frame's: converting, and all of it
 static volatile bool s_live;         // a live channel: catching up and trimming keep it near the live edge
 static volatile int32_t s_frame_us = 41667; // a frame's time, from the PTS: the draw task's "late" limit
 static volatile bool s_preroll_done; // the first frame is up and the decoder is ahead: the sound may start
@@ -168,14 +169,19 @@ static void draw_frame(esp_lcd_panel_handle_t panel, uint16_t *strip[2], const u
         int x = ((LCD_W - H) / 2) & ~1;
         const uint8_t *pu = frame + w * h, *pv = pu + (w / 2) * (h / 2);
         board_wait_scan(0);
+        int64_t t0 = esp_timer_get_time(), conv = 0;
         for (int row = 0, s = 0; row < W; row += STRIP_LINES, s ^= 1) {
             int lines = W - row < STRIP_LINES ? W - row : STRIP_LINES;
+            int64_t c0 = esp_timer_get_time();
             h264_i420_scaled_turned_to_rgb565be(frame, pu, pv, w, h, W, H, rot, row, lines, strip[s]);
+            conv += esp_timer_get_time() - c0;
             esp_err_t err = esp_lcd_panel_draw_bitmap(panel, x, row, x + H, row + lines, strip[s]);
             if (err != ESP_OK && !s_draw_err[0]) {
                 snprintf(s_draw_err, sizeof(s_draw_err), "draw row %d: %s", row, esp_err_to_name(err));
             }
         }
+        s_frame_conv_ms = conv / 1000.0f;
+        s_frame_draw_ms = (esp_timer_get_time() - t0) / 1000.0f;
         return;
     }
     int pw = rot & 1 ? h : w, ph = rot & 1 ? w : h;
@@ -1288,7 +1294,7 @@ void tv_status_json(char *out, size_t len)
     json_escape(err, sizeof(err), tv_error());
     snprintf(out, len,
              "{\"title\":\"%s\",\"playing\":%s,\"live\":%s,\"busy\":%s,\"width\":%d,\"height\":%d,\"fps\":%.1f,"
-             "\"shown\":%d,\"dropped\":%d,\"decode_ms\":%.1f,\"draw_ms\":%.1f,\"first_picture_ms\":%d,"
+             "\"shown\":%d,\"dropped\":%d,\"decode_ms\":%.1f,\"draw_ms\":%.1f,\"frame_convert_ms\":%.1f,\"frame_draw_ms\":%.1f,\"first_picture_ms\":%d,"
              "\"late_avg_ms\":%.1f,\"late_max_ms\":%d,\"restarts\":%u,\"epochs\":%u,\"skipped_to_idr\":%u,"
              "\"audio_gaps\":%u,\"audio_gap_ms\":%u,\"audio_late\":%u,\"late_decoded\":%u,\"starved\":%u,"
              "\"cc_errors\":%u,\"packets\":%u,\"au_queue\":%u,\"latency_ms\":%d,\"latency_min_ms\":%d,"
@@ -1296,7 +1302,7 @@ void tv_status_json(char *out, size_t len)
              "\"demux\":\"%s\",\"decoder\":\"%s\",\"drawer\":\"%s\",\"ram_now\":%u,\"ram_min\":%u,"
              "\"ended\":\"%s\",\"error\":\"%s\",\"source\":%s}",
              title, s_playing ? "true" : "false", s_live ? "true" : "false", s_busy ? "true" : "false", s_pic_w, s_pic_h,
-             s_fps, s_shown, s_dropped, s_decode_ms, s_draw_ms, s_first_ms, s_shown ? (float)s_late_sum_ms / s_shown : 0.0f,
+             s_fps, s_shown, s_dropped, s_decode_ms, s_draw_ms, s_frame_conv_ms, s_frame_draw_ms, s_first_ms, s_shown ? (float)s_late_sum_ms / s_shown : 0.0f,
              s_late_max_ms, (unsigned)s_restarts, (unsigned)s_epochs, (unsigned)s_skipped, (unsigned)s_audio_gaps,
              (unsigned)s_audio_gap_ms, (unsigned)s_audio_late, (unsigned)s_late_decoded, (unsigned)s_starved,
              (unsigned)s_cc_errors, (unsigned)s_packets, (unsigned)s_au_bytes, (int)s_lat_ms, (int)s_lat_min_ms,

@@ -70,7 +70,7 @@
 #define A_LCD_D1       GPIO_NUM_5
 #define A_LCD_D2       GPIO_NUM_6
 #define A_LCD_D3       GPIO_NUM_7
-#define A_LCD_PCLK_HZ  (40 * 1000 * 1000)
+#define A_LCD_PCLK_HZ  (80 * 1000 * 1000)
 #define A_TP_INT       GPIO_NUM_21
 #define A_KEY_BOOT     GPIO_NUM_0
 #define A_LCD_TE       GPIO_NUM_13 // the panel's tearing effect line (Waveshare's schematic)

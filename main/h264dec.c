@@ -133,28 +133,48 @@ void h264_i420_turned_to_rgb565be(const uint8_t *py, const uint8_t *pu, const ui
 void h264_i420_scaled_turned_to_rgb565be(const uint8_t *py, const uint8_t *pu, const uint8_t *pv, int w, int h, int W,
                                          int H, int rot, int first, int lines, uint16_t *out)
 {
-    // panel column c shows picture row Y (c, or H - 1 - c turned the other way), source row sy
-    static int16_t sy[512];
-    static int last_h, last_H, last_rot;
-    if (h != last_h || H != last_H || rot != last_rot) {
+    // panel column c shows picture row Y (c, or H - 1 - c turned the other way), source row sy;
+    // panel row r shows picture column X (W - 1 - r, or r), source column sx
+    static int16_t sy[512], sx[512];
+    static int last_w, last_h, last_W, last_H, last_rot;
+    if (w != last_w || h != last_h || W != last_W || H != last_H || rot != last_rot) {
         for (int c = 0; c < H && c < 512; c++) {
-            int Y = rot == 1 ? c : H - 1 - c;
-            sy[c] = Y * h / H;
+            sy[c] = (rot == 1 ? c : H - 1 - c) * h / H;
         }
+        for (int r = 0; r < W && r < 512; r++) {
+            sx[r] = (rot == 1 ? W - 1 - r : r) * w / W;
+        }
+        last_w = w;
         last_h = h;
+        last_W = W;
         last_H = H;
         last_rot = rot;
     }
-    for (int r = first; r < first + lines; r++) {
-        // panel row r shows picture column X, source column sx
-        int X = rot == 1 ? W - 1 - r : r;
-        int sx = X * w / W, cx = sx / 2;
-        uint16_t *o = out + (r - first) * H;
-        for (int c = 0; c < H; c++) {
-            int y = sy[c], k = (y / 2) * (w / 2) + cx;
-            int cy = s_y[py[y * w + sx]];
-            o[c] = s_r[cy + s_rv[pv[k]] + CLAMP_OFF] | s_g[cy + s_gu[pu[k]] + s_gv[pv[k]] + CLAMP_OFF] |
-                   s_b[cy + s_bu[pu[k]] + CLAMP_OFF];
+    // The strip's few source columns, all rows, converted first two rows at a time with the
+    // chroma shared (h264_i420_rows_to_rgb565be), then picked out pixel by pixel: converting each
+    // panel pixel on its own took ~50 ms a frame.
+    int a = sx[first], b = sx[first + lines - 1];
+    int x0 = (a < b ? a : b) & ~1, bw = ((a > b ? a : b) - x0 + 2) & ~1;
+    static uint16_t *blk;
+    static size_t blk_n;
+    if ((size_t)(h * bw) > blk_n) {
+        heap_caps_free(blk);
+        blk_n = h * bw + h * 4;
+        blk = heap_caps_malloc(blk_n * 2, MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
+        if (!blk) {
+            blk = heap_caps_malloc(blk_n * 2, MALLOC_CAP_SPIRAM);
+        }
+        if (!blk) {
+            blk_n = 0;
+            return;
+        }
+    }
+    h264_i420_rows_to_rgb565be(py + x0, pu + x0 / 2, pv + x0 / 2, w, bw, h, blk);
+    for (int c = 0; c < H; c++) {
+        const uint16_t *src = blk + sy[c] * bw - x0;
+        uint16_t *o = out + c;
+        for (int r = first; r < first + lines; r++, o += H) {
+            *o = src[sx[r]];
         }
     }
 }
