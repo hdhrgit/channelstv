@@ -214,6 +214,10 @@ static void on_key(board_key_t key, press_t press)
         app_set_volume(app_volume() - 5);
         ui_show_volume(app_volume());
         break;
+    case KEY_VOL_CYCLE:
+        app_set_volume(app_volume() >= 5 ? app_volume() - 5 : 100);
+        ui_show_volume(app_volume());
+        break;
     }
 }
 
