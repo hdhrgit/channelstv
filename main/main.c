@@ -218,7 +218,7 @@ static void on_key(board_key_t key, press_t press)
         // one hold: down 5 at a time to 0, back up to 100, down again; the second time it gets to
         // 0 it climbs to 50 and stays there until the key is let go and held again
         static int64_t last_us;
-        static int zeros, dir;
+        static int zeros, dir = -5;
         int64_t now = esp_timer_get_time();
         if (now - last_us > 800000) {
             zeros = 0; // a new hold (the steps come every 500 ms)
