@@ -528,8 +528,9 @@ void app_main(void)
     esp_pm_config_t pm = {.max_freq_mhz = 240, .min_freq_mhz = 80, .light_sleep_enable = false};
     esp_pm_lock_create(ESP_PM_CPU_FREQ_MAX, 0, "busy", &s_busy_lock);
     esp_pm_configure(&pm);
-    xTaskCreate(power_task, "power", 2560, NULL, 3, NULL);
-    xTaskCreate(roam_task, "roam", 3072, NULL, 2, NULL);
+    // neither touches flash: their stacks go to PSRAM, internal RAM is for the decoder
+    xTaskCreateWithCaps(power_task, "power", 2560, NULL, 3, NULL, MALLOC_CAP_SPIRAM);
+    xTaskCreateWithCaps(roam_task, "roam", 3072, NULL, 2, NULL, MALLOC_CAP_SPIRAM);
     const esp_timer_create_args_t wd = {.callback = rollback_watchdog, .name = "rollback"};
     esp_timer_handle_t t;
     esp_timer_create(&wd, &t);

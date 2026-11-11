@@ -1261,7 +1261,9 @@ bool tv_play(const char *url, const char *title, bool live)
         s_demux_running = false;
     }
     if (!s_demux_running ||
-        xTaskCreatePinnedToCoreWithCaps(tv_video_task, "tv_video", 8192, NULL, 7, &s_main_task, 0, MALLOC_CAP_SPIRAM) != pdPASS) {
+        // the decoder's stack in internal RAM: its locals and spills are in every inner loop (it uses about 3.6 KB)
+        xTaskCreatePinnedToCoreWithCaps(tv_video_task, "tv_video", 6144, NULL, 7, &s_main_task, 0,
+                                        MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT) != pdPASS) {
         strcpy(s_error, "out of RAM for the playback tasks");
         s_stop = true;
         player_stop();

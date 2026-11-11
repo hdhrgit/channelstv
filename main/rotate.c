@@ -104,7 +104,7 @@ void rotate_start(void)
         nvs_close(h);
     }
     want();
-    xTaskCreate(rotate_task, "rotate", 2560, NULL, 2, NULL);
+    xTaskCreateWithCaps(rotate_task, "rotate", 2560, NULL, 2, NULL, MALLOC_CAP_SPIRAM); // no flash access: PSRAM stack
 }
 
 int rotate_setting(void)
