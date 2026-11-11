@@ -97,7 +97,7 @@ static adc_oneshot_unit_handle_t s_adc;
 static adc_cali_handle_t s_cali;
 static char s_i2c_devs[64];
 static i2c_master_dev_handle_t s_imu, s_pmu;
-static board_info_t s_info = {BOARD_LCD154, "Waveshare ESP32-S3-Touch-LCD-1.54", "", "ST7789 240x240 SPI", "CST816 (0x15)"};
+static board_info_t s_info = {BOARD_LCD154, "Waveshare ESP32-S3-Touch-LCD-1.54", "", "ST7789 240x240", "CST816 (0x15)"};
 int g_lcd_w = 240, g_lcd_h = 240;
 static uint8_t s_imu_addr, s_exp_in;
 static int s_gpio_pa = PIN_PA;
@@ -641,7 +641,7 @@ void board_init(void)
         amoled_expander();
         bool v2 = i2c_master_probe(s_i2c, 0x15, 50) == ESP_OK;
         s_info = (board_info_t){BOARD_AMOLED18, "Waveshare ESP32-S3-Touch-AMOLED-1.8", v2 ? "V2" : "V1",
-                                v2 ? "CO5300 368x448 QSPI" : "SH8601 368x448 QSPI", v2 ? "CST816 (0x15)" : "FT3168 (0x38)"};
+                                v2 ? "CO5300 368x448" : "SH8601 368x448", v2 ? "CST816 (0x15)" : "FT3168 (0x38)"};
         g_lcd_w = 368;
         g_lcd_h = 448;
         s_gpio_pa = A_PA;
@@ -1136,7 +1136,7 @@ void board_chips_json(char *buf, size_t len)
     esp_flash_get_size(NULL, &flash);
     uint8_t mac[6] = {0};
     esp_efuse_mac_get_default(mac);
-    snprintf(id, sizeof(id), "rev v%d.%d, %lu MB flash, %u MB PSRAM", ci.revision / 100, ci.revision % 100,
+    snprintf(id, sizeof(id), "v%d.%d, %lu MB, %u MB PSRAM", ci.revision / 100, ci.revision % 100,
              (unsigned long)(flash >> 20), (unsigned)(esp_psram_get_size() >> 20));
     pos = chip(buf, len, pos, "ESP32-S3", "processor, Wi-Fi", -1, id, true);
     snprintf(id, sizeof(id), "MAC %02x:%02x:%02x:%02x:%02x:%02x", mac[0], mac[1], mac[2], mac[3], mac[4], mac[5]);
@@ -1147,11 +1147,11 @@ void board_chips_json(char *buf, size_t len)
         vTaskDelay(pdMS_TO_TICKS(100));
         uint32_t te_n = s_te_count - n0;
         bool read = s_panel_id && s_panel_id != 0xffffff; // with nothing driving the line back it reads all ones
-        snprintf(id, sizeof(id), read ? "RDDID %06lx" : "answers its init; its ID doesn't read back over QSPI",
+        snprintf(id, sizeof(id), read ? "RDDID %06lx" : "running (no ID over QSPI)",
                  (unsigned long)s_panel_id);
         pos = chip(buf, len, pos, v2 ? "CO5300" : "SH8601", "AMOLED driver, 368x448, QSPI", -1, id, s_panel != NULL);
         if (te_n) {
-            snprintf(id, sizeof(id), "GPIO13: %lu pulses in 100 ms, every %.2f ms", (unsigned long)te_n, s_te_period_us / 1000.0);
+            snprintf(id, sizeof(id), "GPIO13, every %.2f ms", s_te_period_us / 1000.0);
         } else {
             snprintf(id, sizeof(id), "GPIO13: no pulses");
         }
@@ -1163,11 +1163,11 @@ void board_chips_json(char *buf, size_t len)
         snprintf(id, sizeof(id), p >= 0 ? "IC type 0x%02x" : "no answer", p);
         pos = chip(buf, len, pos, "AXP2101", "power, battery charger, PWR key", PMU_ADDR, id, p == 0x4a);
         int e = peek(EXP_ADDR, 0x03);
-        snprintf(id, sizeof(id), e >= 0 ? "direction 0x%02x, inputs 0x%02x at boot" : "no answer", e, s_exp_in);
+        snprintf(id, sizeof(id), e >= 0 ? "dir 0x%02x, in 0x%02x" : "no answer", e, s_exp_in);
         pos = chip(buf, len, pos, v2 ? "TCAL9534" : "TCA9554", "IO expander: panel power and resets", EXP_ADDR, id, e >= 0);
         int r = peek(RTC_ADDR, 0x04);
         // bit 7 of the seconds: the oscillator stopped since the clock was last set
-        snprintf(id, sizeof(id), r < 0 ? "no answer" : r & 0x80 ? "running, %02x s, not set" : "running, %02x s", r & 0x7f);
+        snprintf(id, sizeof(id), r < 0 ? "no answer" : r & 0x80 ? "%02x s, time not set" : "running, %02x s", r & 0x7f);
         pos = chip(buf, len, pos, "PCF85063", "real-time clock", RTC_ADDR, id, r >= 0);
     } else {
         pos = chip(buf, len, pos, "ST7789", "LCD driver, 240x240, SPI", -1, "", s_panel != NULL);
@@ -1183,7 +1183,7 @@ void board_chips_json(char *buf, size_t len)
     pos = chip(buf, len, pos, "ES8311", AMOLED ? "audio codec: speaker (and mic, unused)" : "audio codec: speaker", 0x18, id,
                c1 == 0x83);
     int w = s_imu_addr ? peek(s_imu_addr, 0x00) : -1, rv = s_imu_addr ? peek(s_imu_addr, 0x01) : -1;
-    snprintf(id, sizeof(id), w >= 0 ? "WHO_AM_I 0x%02x, revision 0x%02x" : "no answer", w, rv);
+    snprintf(id, sizeof(id), w >= 0 ? "ID 0x%02x, rev 0x%02x" : "no answer", w, rv);
     pos = chip(buf, len, pos, "QMI8658", "motion sensor", s_imu_addr ? s_imu_addr : IMU_ADDR, id, w == 0x05);
     addf(buf, len, pos, "]");
 }

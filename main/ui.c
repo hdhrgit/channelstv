@@ -361,7 +361,8 @@ static void version_rows(void)
     }
     // the board and its chips, as on /chips (no network name or MAC: screenshots stay shareable)
     const board_info_t *bi = board_info();
-    ROW("Board\n%s%s%s", bi->name, bi->rev[0] ? " " : "", bi->rev);
+    const char *short_name = strstr(bi->name, "Touch-") ? strstr(bi->name, "Touch-") + 6 : bi->name;
+    ROW("Board\n%s%s%s", short_name, bi->rev[0] ? " " : "", bi->rev); // "AMOLED-1.8 V2"
     ROW("Display\n%s", bi->display);
     char *json = heap_caps_malloc(3072, MALLOC_CAP_SPIRAM);
     if (json) {
@@ -379,8 +380,9 @@ static void version_rows(void)
         cJSON_Delete(chips);
         heap_caps_free(json);
     }
-    const esp_app_desc_t *app = esp_app_get_description();
-    ROW("Firmware\n%s, built %s %s", CHANNELSTV_VERSION, app->date, app->time);
+    char sha[9];
+    esp_app_get_elf_sha256(sha, sizeof(sha)); // the build, where there's no build date to show
+    ROW("Firmware\n%s (%s)", CHANNELSTV_VERSION, sha);
     wifi_ap_record_t ap;
     if (net.connected && esp_wifi_sta_get_ap_info(&ap) == ESP_OK) {
         ROW("Wi-Fi\n%d dBm, channel %d", net.rssi, ap.primary);
@@ -394,11 +396,12 @@ static void version_rows(void)
     } else {
         ROW("Battery\nnone%s", bat.usb ? ", on USB" : "");
     }
-    ROW("Memory free\n%u KB internal (lowest %u), %u KB PSRAM", (unsigned)(heap_caps_get_free_size(MALLOC_CAP_INTERNAL) / 1024),
-        (unsigned)(heap_caps_get_minimum_free_size(MALLOC_CAP_INTERNAL) / 1024),
-        (unsigned)(heap_caps_get_free_size(MALLOC_CAP_SPIRAM) / 1024));
+    ROW("Internal RAM free\n%u KB, lowest %u KB", (unsigned)(heap_caps_get_free_size(MALLOC_CAP_INTERNAL) / 1024),
+        (unsigned)(heap_caps_get_minimum_free_size(MALLOC_CAP_INTERNAL) / 1024));
+    ROW("PSRAM free\n%u KB", (unsigned)(heap_caps_get_free_size(MALLOC_CAP_SPIRAM) / 1024));
     int64_t up = esp_timer_get_time() / 1000000;
-    ROW("Up\n%dh %02dm, last start: %s", (int)(up / 3600), (int)(up / 60 % 60), app_reset_reason());
+    ROW("Up\n%dh %02dm", (int)(up / 3600), (int)(up / 60 % 60));
+    ROW("Last start\n%s", app_reset_reason());
 #undef ROW
     s_count = 0;
     for (int k = page_first(s_stack[s_depth - 1].page, n); k < n && s_count < ROWS; k++) {
