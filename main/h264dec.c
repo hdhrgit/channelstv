@@ -218,23 +218,22 @@ void h264_i420_scaled_turned_to_rgb565be(const uint8_t *py, const uint8_t *pu, c
         last_H = H;
         last_rot = rot;
     }
-    // The strip's few source columns, all rows, converted first two rows at a time with the
-    // chroma shared (h264_i420_rows_to_rgb565be), then picked out pixel by pixel: converting each
-    // panel pixel on its own took ~50 ms a frame.
-    // converted once per strip (a block spanning several strips measured no faster)
-#define BLK_ROWS 0
+    // The strip's few source columns, all rows, converted first, as a quarter turn (the PIE path,
+    // h264_i420_turned_to_rgb565be): column by column, each column's rows one after the other. Then
+    // each panel row is one source column picked out row by row: written in order, read close
+    // together. Converting each panel pixel on its own took ~50 ms a frame.
     static uint16_t *blk;
     static size_t blk_n;
-    static int blk_first = -1, blk_last, x0, bw;
+    static int blk_first = -1, blk_last, xa, xb;
     if (first == 0 || first < blk_first || first + lines > blk_last) {
-        int last = first + (BLK_ROWS > lines ? BLK_ROWS : lines);
-        last = last > W ? W : last;
+        int last = first + lines > W ? W : first + lines;
         int a = sx[first], b = sx[last - 1];
-        x0 = (a < b ? a : b) & ~1;
-        bw = ((a > b ? a : b) - x0 + 2) & ~1;
-        if ((size_t)(h * bw) > blk_n) {
+        xa = (a < b ? a : b) & ~3;                       // the turned path takes 4 columns at a time
+        xb = ((a > b ? a : b) + 4) & ~3;
+        xb = xb > w ? w : xb;
+        if ((size_t)(h * (xb - xa)) > blk_n) {
             heap_caps_free(blk);
-            blk_n = h * bw + h * 4;
+            blk_n = h * (xb - xa) + h * 8;
             // in PSRAM: small enough to stay in the cache while it's read, and internal RAM is short
             blk = heap_caps_malloc(blk_n * 2, MALLOC_CAP_SPIRAM);
             if (!blk) {
@@ -243,15 +242,16 @@ void h264_i420_scaled_turned_to_rgb565be(const uint8_t *py, const uint8_t *pu, c
                 return;
             }
         }
-        h264_i420_rows_to_rgb565be(py + x0, pu + x0 / 2, pv + x0 / 2, w, bw, h, blk);
+        // turned once (rot 1): source column x lands at blk + (xb - 1 - x) * h, its rows in order
+        h264_i420_turned_to_rgb565be(py, pu, pv, w, h, 1, w - xb, xb - xa, blk);
         blk_first = first;
         blk_last = last;
     }
-    for (int c = 0; c < H; c++) {
-        const uint16_t *src = blk + sy[c] * bw - x0;
-        uint16_t *o = out + c;
-        for (int r = first; r < first + lines; r++, o += H) {
-            *o = src[sx[r]];
+    for (int r = first; r < first + lines; r++) {
+        const uint16_t *src = blk + (xb - 1 - sx[r]) * h;
+        uint16_t *o = out + (r - first) * H;
+        for (int c = 0; c < H; c++) {
+            o[c] = src[sy[c]];
         }
     }
 }
