@@ -176,7 +176,13 @@ static void draw_frame(esp_lcd_panel_handle_t panel, uint16_t *strip[2], const u
         for (int row = 0, s = 0; row < W; row += STRIP_LINES, s ^= 1) {
             int lines = W - row < STRIP_LINES ? W - row : STRIP_LINES;
             int64_t c0 = esp_timer_get_time();
-            h264_i420_scaled_turned_to_rgb565be(frame, pu, pv, w, h, W, H, rot, row, lines, strip[s]);
+            if (W == w && H == h) {
+                // 1:1 (a picture made for the panel turned): a plain quarter turn, 2x2 blocks sharing
+                // their chroma, no stretching tables
+                h264_i420_turned_to_rgb565be(frame, pu, pv, w, h, rot, row, lines, strip[s]);
+            } else {
+                h264_i420_scaled_turned_to_rgb565be(frame, pu, pv, w, h, W, H, rot, row, lines, strip[s]);
+            }
             conv += esp_timer_get_time() - c0;
             esp_err_t err = esp_lcd_panel_draw_bitmap(panel, x, row, x + H, row + lines, strip[s]);
             if (err != ESP_OK && !s_draw_err[0]) {
@@ -1042,7 +1048,9 @@ static void tv_video_task(void *arg)
     }
     s_clk.last_at_us = esp_timer_get_time();
     s_draw_running = true;
-    if (xTaskCreatePinnedToCoreWithCaps(draw_task, "tv_draw", 4096, NULL, 8, &s_draw_task, 1, MALLOC_CAP_SPIRAM) != pdPASS) {
+    // its stack in internal RAM: the colour conversion's spills to a PSRAM stack cost a sideways
+    // frame several ms
+    if (xTaskCreatePinnedToCoreWithCaps(draw_task, "tv_draw", 4096, NULL, 8, &s_draw_task, 1, MALLOC_CAP_INTERNAL) != pdPASS) {
         s_draw_running = false;
         strcpy(s_error, "out of RAM for the draw task");
         s_stop = true;
