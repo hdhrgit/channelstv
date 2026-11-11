@@ -14,4 +14,4 @@ dependencies:
   videojet:
     git: https://github.com/hdhrgit/VideoJet.git
     path: components/videojet
-    version: 6e1829a8ce24ae0c7a98b5479d717c529f38f53c
+    version: a8f4290e90cb70e9c6879f7d3c835b5cec3b3c31

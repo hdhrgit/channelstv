@@ -139,7 +139,7 @@ dependencies:
       type: service
     version: 9.3.0
   videojet:
-    component_hash: 9aeb97607d3be40a97e10b09867863b2a8f29426a202bb866a3f8ed46acbd0ef
+    component_hash: d80406cf6914f45f3e87c94fa1e85e45b61d82e1d1925049d7a34d50211fbdd1
     dependencies:
     - name: idf
       version: '>=5.4'
@@ -149,7 +149,7 @@ dependencies:
       type: git
     targets:
     - esp32s3
-    version: 6e1829a8ce24ae0c7a98b5479d717c529f38f53c
+    version: a8f4290e90cb70e9c6879f7d3c835b5cec3b3c31
 direct_dependencies:
 - espressif/esp_audio_codec
 - espressif/esp_audio_effects
@@ -162,6 +162,6 @@ direct_dependencies:
 - idf
 - lvgl/lvgl
 - videojet
-manifest_hash: 7cd52b7f3ff7327d5e224c2b61e54556127bfeaf99c20f4bc5c0918428f3173f
+manifest_hash: fbac706b04c314cfe859dca753b5f85354eda7db3cb0a6bfb9a38270da9a7e4a
 target: esp32s3
 version: 2.0.0
