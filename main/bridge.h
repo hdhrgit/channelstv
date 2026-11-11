@@ -47,8 +47,8 @@ void bridge_set_picture(const char *shape);
 // to try until the next restart.
 void bridge_size(int *w, int *h);
 void bridge_set_size(int w, int h);
-// The frame rate the board asks the bridge for: 15, 20 or 24, or 0 for the bridge's own (24).
-// Saved in NVS.
+// The frame rate the board asks the bridge for on every stream: 15, 20 or 24. Saved in NVS; until
+// set, 24 on a 240x240 panel and 15 on a larger one, where decoding has more to do.
 int bridge_fps(void);
 void bridge_set_fps(int fps);
 

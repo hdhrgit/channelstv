@@ -305,11 +305,7 @@ static void settings_rows(void)
         if (k == SET_PICTURE) {
             snprintf(e->title, sizeof(e->title), "Picture: %s", !strcmp(bridge_picture(), "4x3") ? "4:3 centre" : "16:9");
         } else if (k == SET_FPS) {
-            if (bridge_fps()) {
-                snprintf(e->title, sizeof(e->title), "Frame rate: %d fps", bridge_fps());
-            } else {
-                strlcpy(e->title, "Frame rate: auto", sizeof(e->title));
-            }
+            snprintf(e->title, sizeof(e->title), "Frame rate: %d fps", bridge_fps());
         } else if (k == SET_WEB) {
             snprintf(e->title, sizeof(e->title), "Web control: %s", web[app_web_mode()]);
         } else if (k == SET_OTA) {
@@ -1471,8 +1467,8 @@ static void activate_row(int i)
             bridge_set_picture(!strcmp(bridge_picture(), "4x3") ? "16x9" : "4x3");
             settings_rows();
             break;
-        case SET_FPS: // auto, 15, 20, 24, auto, ...
-            bridge_set_fps(!bridge_fps() ? 15 : bridge_fps() == 15 ? 20 : bridge_fps() == 20 ? 24 : 0);
+        case SET_FPS: // 24, 15, 20, 24, ...
+            bridge_set_fps(bridge_fps() == 24 ? 15 : bridge_fps() == 15 ? 20 : 24);
             settings_rows();
             break;
         case SET_ROTATION: // auto, 0, 90, 180, 270, auto, ...

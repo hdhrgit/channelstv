@@ -37,7 +37,7 @@ static char s_udn[64];
 static const char *s_found_by = "";
 static char s_override[64];
 static bool s_4x3;
-static int s_fps; // 0: the bridge's own rate
+static int s_fps;
 static volatile unsigned s_gen;
 static volatile bool s_rescan = true;
 // The bridge's client profile the board asks for, and the overrides it adds for the centre 4:3
@@ -538,6 +538,11 @@ static void bridge_task(void *arg)
     }
 }
 
+static int fps_default(void)
+{
+    return LCD_W * LCD_H > 240 * 240 ? 15 : 24;
+}
+
 int bridge_fps(void)
 {
     return s_fps;
@@ -545,7 +550,7 @@ int bridge_fps(void)
 
 void bridge_set_fps(int fps)
 {
-    s_fps = fps == 15 || fps == 20 || fps == 24 ? fps : 0;
+    s_fps = fps == 15 || fps == 20 || fps == 24 ? fps : fps_default();
     char v[4];
     snprintf(v, sizeof(v), "%d", s_fps);
     nvs_put("fps", v);
@@ -560,7 +565,8 @@ void bridge_start(bool (*online)(void))
     nvs_str("picture", p, sizeof(p));
     s_4x3 = !strcmp(p, "4x3");
     nvs_str("fps", p, sizeof(p));
-    s_fps = atoi(p);
+    int fps = atoi(p); // an earlier "0" (the bridge's own rate) gets the default
+    s_fps = fps == 15 || fps == 20 || fps == 24 ? fps : fps_default();
     // internal stack: it writes NVS (flash)
     xTaskCreate(bridge_task, "bridge", 6144, NULL, 3, &s_task);
 }
@@ -615,7 +621,7 @@ unsigned bridge_gen(void)
 // ---------------------------------------------------------------- ContentDirectory
 
 // The stream URL with ?profile=esp32 unless it names a profile already, for the centre 4:3 the
-// bridge's overrides for that picture, and the frame rate when one is set.
+// bridge's overrides for that picture, and the frame rate.
 static void with_profile(const char *url, char *out, size_t len)
 {
     strlcpy(out, url, len);
@@ -631,7 +637,7 @@ static void with_profile(const char *url, char *out, size_t len)
         size_t n = strlen(out);
         snprintf(out + n, len - n, "%c" OVERRIDES_4X3, strchr(out, '?') ? '&' : '?');
     }
-    if (s_fps && !strstr(out, "fps=")) {
+    if (!strstr(out, "fps=")) {
         size_t n = strlen(out);
         snprintf(out + n, len - n, "%cfps=%d", strchr(out, '?') ? '&' : '?', s_fps);
     }

@@ -247,7 +247,7 @@ static esp_err_t settings(httpd_req_t *req)
         sscanf(v, "%dx%d", &w, &h); // "320x180"; "0x0": the board's own
         bridge_set_size(w, h);
     if (query_str(req, "fps", v, sizeof(v))) {
-        bridge_set_fps(!strcmp(v, "auto") ? 0 : atoi(v));
+        bridge_set_fps(atoi(v));
     }
     int vol = query_int(req, "volume", -1);
     if (vol >= 0) {
@@ -274,11 +274,7 @@ static esp_err_t settings(httpd_req_t *req)
     cJSON_AddStringToObject(root, "size", size);
     cJSON_AddBoolToObject(root, "tesync", board_te_sync());
     cJSON_AddNumberToObject(root, "te_period_us", board_te_period_us());
-    if (bridge_fps()) {
-        cJSON_AddNumberToObject(root, "fps", bridge_fps());
-    } else {
-        cJSON_AddStringToObject(root, "fps", "auto");
-    }
+    cJSON_AddNumberToObject(root, "fps", bridge_fps());
     cJSON_AddNumberToObject(root, "volume", app_volume());
     cJSON_AddNumberToObject(root, "brightness", ui_brightness());
     if (!ui_dim_seconds()) {
