@@ -15,6 +15,9 @@
 #include <stdlib.h>
 #include <string.h>
 #include "esp_heap_caps.h"
+#include "esp_wifi.h"
+#include "esp_app_desc.h"
+#include "cJSON.h"
 #include "esp_lvgl_port.h"
 #include "esp_timer.h"
 #include "freertos/FreeRTOS.h"
@@ -298,7 +301,7 @@ static void settings_rows(void)
         } else if (k == SET_OTA) {
             snprintf(e->title, sizeof(e->title), "OTA updates: %s", app_ota_enabled() ? "on" : "off");
         } else if (k == SET_VERSION) {
-            snprintf(e->title, sizeof(e->title), "Version: %s", CHANNELSTV_VERSION);
+            snprintf(e->title, sizeof(e->title), "Version & board: %s", CHANNELSTV_VERSION);
         } else if (k == SET_ROTATION) {
             snprintf(e->title, sizeof(e->title), "Rotation: %s", rotations[rotate_setting() + 1]);
         } else if (k == SET_BRIGHT) {
@@ -344,29 +347,69 @@ static void version_rows(void)
     if (p && !strcmp(p, ":8200")) {
         *p = '\0';
     }
-    s_count = 0;
-    for (int k = 1; k < 5; k++) { // the version itself is the page's heading
-        if (k == 4 && !base[0]) {
-            break;
+    // every row first ("name\nvalue"), then the page's share of them
+    static EXT_RAM_BSS_ATTR char rows[40][sizeof(s_entries[0].title)];
+    int n = 0;
+#define ROW(...) snprintf(rows[n++], sizeof(rows[0]), __VA_ARGS__)
+    ROW("Board IP\n%s", net.ip[0] ? net.ip : "none");
+    if (base[0]) {
+        ROW("Bridge (%s)\n%s", bridge_found_by(), host);
+        ROW("Bridge version\n%s", ver[0] ? ver : "unknown");
+        ROW("Bridge name\n%s", bridge_name()); // in full: the row with id #version4
+    } else {
+        ROW("Bridge\nnone");
+    }
+    // the board and its chips, as on /chips (no network name or MAC: screenshots stay shareable)
+    const board_info_t *bi = board_info();
+    ROW("Board\n%s%s%s", bi->name, bi->rev[0] ? " " : "", bi->rev);
+    ROW("Display\n%s", bi->display);
+    char *json = heap_caps_malloc(3072, MALLOC_CAP_SPIRAM);
+    if (json) {
+        board_chips_json(json, 3072);
+        cJSON *chips = cJSON_Parse(json);
+        const cJSON *c;
+        cJSON_ArrayForEach(c, chips) {
+            const char *part = cJSON_GetStringValue(cJSON_GetObjectItem(c, "part"));
+            const char *id = cJSON_GetStringValue(cJSON_GetObjectItem(c, "id"));
+            if (!part || !strcmp(part, "Wi-Fi") || n >= 34) {
+                continue; // its "ID" is the MAC
+            }
+            ROW("%s %s\n%s", part, cJSON_IsTrue(cJSON_GetObjectItem(c, "ok")) ? "ok" : "missing", id ? id : "");
         }
+        cJSON_Delete(chips);
+        heap_caps_free(json);
+    }
+    const esp_app_desc_t *app = esp_app_get_description();
+    ROW("Firmware\n%s, built %s %s", CHANNELSTV_VERSION, app->date, app->time);
+    wifi_ap_record_t ap;
+    if (net.connected && esp_wifi_sta_get_ap_info(&ap) == ESP_OK) {
+        ROW("Wi-Fi\n%d dBm, channel %d", net.rssi, ap.primary);
+    } else {
+        ROW("Wi-Fi\nnot connected");
+    }
+    battery_t bat;
+    board_battery(&bat);
+    if (bat.mv > 0) {
+        ROW("Battery\n%.2f V, %d %%%s", bat.mv / 1000.0, bat.percent, bat.charging ? ", charging" : bat.usb ? ", on USB" : "");
+    } else {
+        ROW("Battery\nnone%s", bat.usb ? ", on USB" : "");
+    }
+    ROW("Memory free\n%u KB internal (lowest %u), %u KB PSRAM", (unsigned)(heap_caps_get_free_size(MALLOC_CAP_INTERNAL) / 1024),
+        (unsigned)(heap_caps_get_minimum_free_size(MALLOC_CAP_INTERNAL) / 1024),
+        (unsigned)(heap_caps_get_free_size(MALLOC_CAP_SPIRAM) / 1024));
+    int64_t up = esp_timer_get_time() / 1000000;
+    ROW("Up\n%dh %02dm, last start: %s", (int)(up / 3600), (int)(up / 60 % 60), app_reset_reason());
+#undef ROW
+    s_count = 0;
+    for (int k = page_first(s_stack[s_depth - 1].page, n); k < n && s_count < ROWS; k++) {
         cd_entry_t *e = &s_entries[s_count++];
         memset(e, 0, sizeof(*e));
-        snprintf(e->id, sizeof(e->id), "#version%d", k);
+        // the bridge's whole name keeps its id: it scrolls once when the page opens
+        snprintf(e->id, sizeof(e->id), "#version%d", strncmp(rows[k], "Bridge name\n", 12) ? 100 + k : 4);
         e->play_count = -1;
-        switch (k) {
-        case 1: snprintf(e->title, sizeof(e->title), "Board IP\n%s", net.ip[0] ? net.ip : "none"); break;
-        case 2:
-            if (base[0]) {
-                snprintf(e->title, sizeof(e->title), "Bridge (%s)\n%s", bridge_found_by(), host);
-            } else {
-                strlcpy(e->title, "Bridge\nnone", sizeof(e->title));
-            }
-            break;
-        case 3: snprintf(e->title, sizeof(e->title), "Bridge version\n%s", ver[0] ? ver : "unknown"); break;
-        default: snprintf(e->title, sizeof(e->title), "Bridge name\n%s", bridge_name()); break; // in full
-        }
+        strlcpy(e->title, rows[k], sizeof(e->title));
     }
-    s_total = s_count;
+    s_total = n;
     s_stack[s_depth - 1].total = s_total;
 }
 
