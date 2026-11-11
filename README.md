@@ -4,18 +4,32 @@ Live TV and recordings from a [Channels DVR](https://getchannels.com/dvr-server/
 ESP32-S3 touchscreen, through the [DLNA bridge for Channels DVR](https://github.com/hdhrgit/dlna-bridge).
 
 The bridge converts each stream into something the board can decode (H.264 Constrained
-Baseline, one slice per frame, up to 240x240, with mono AAC-LC audio). The board finds the
+Baseline, one slice per frame, sized for the board's screen, with mono AAC-LC audio). The board finds the
 bridge on the network by itself, lists what the bridge serves, and plays it with sound.
 
 ![channelstv on the board: Wi-Fi setup, browsing, the number pad, live TV, the playback controls, seeking a recording, Settings, About](docs/demo.gif)
 
 The pictures come from the board's own screen (`/api/screen`); recording titles are blurred, and the address shown is an example.
 
-## Board
+## Boards
 
-[Waveshare ESP32-S3-Touch-LCD-1.54](https://docs.waveshare.com/ESP32-S3-Touch-LCD-1.54):
-ESP32-S3 with 16 MB flash and 8 MB PSRAM, a 240x240 ST7789 touchscreen (CST816 touch), an ES8311
-speaker codec, three keys and a Li-ion battery.
+One image runs on all of them: the board is told apart at start-up, and Settings → **Version &
+board** says which one it found.
+
+| | [ESP32-S3-Touch-LCD-1.54](https://docs.waveshare.com/ESP32-S3-Touch-LCD-1.54) | [ESP32-S3-Touch-AMOLED-1.8](https://www.waveshare.com/wiki/ESP32-S3-Touch-AMOLED-1.8) |
+|---|---|---|
+| Screen | 240x240 LCD (ST7789, SPI) | 368x448 AMOLED on QSPI: SH8601 (V1) or CO5300 (V2) |
+| Touch | CST816 | FT3168 (V1) or CST816 (V2) |
+| Picture asked of the bridge | the `esp32` profile's (240 wide) | 368x206 (4:3: 320x240) |
+| Rows a page | 4 | 6, and a heading as tall as a row |
+| Keys | PWR, VOL+, VOL- | PWR and BOOT (see [Using it](#using-it)) |
+| Battery | through a latch and the ADC | the AXP2101 power chip |
+| Turning the board | the whole screen turns | the menus stay upright; video turns, sideways across the whole width |
+
+Both have an ESP32-S3 with 16 MB flash and 8 MB PSRAM, an ES8311 speaker codec, a QMI8658 motion
+sensor and a Li-ion battery. On the AMOLED-1.8 each video frame is written just behind the panel's
+refresh, timed by its tearing-effect line (GPIO13), so a frame never shows half old, half new
+(`/api/settings?tesync=0` turns that off until the next start, to compare).
 
 ## Installing
 
@@ -82,10 +96,11 @@ The setup page then offers **Back to <network>** for the one just forgotten.
 ## Using it
 
 - **Screen:** the bridge's folders (Live TV, Favorites, Recent recordings, TV Shows, Movies,
-  Recording now, Channels by source) and Settings, four big rows a page; the page number is at
-  the top right.
+  Recording now, Channels by source) and Settings, four big rows a page (six on the AMOLED-1.8);
+  the page number is at the top right. The last page of a folder shows its last full page of rows.
   - Swipe up for the next page, down for the previous one; swipe right (or tap the arrow at the
-    top left) to go back.
+    top left) to go back. A quick flick slides through many pages, with the page number shown
+    large, and stops on the page it lands on; the faster the flick, the further. A tap stops it.
   - Tap a folder to open it, a channel or a recording to play it. "Tuning... N s" covers the
     screen until the first picture (the DVR can take 15-30 s to start a channel; a tap there
     cancels).
@@ -101,7 +116,8 @@ The setup page then offers **Back to <network>** for the one just forgotten.
   volume stays on the VOL keys. Taps add up (three taps: 1:30) and the seek happens 0.8 s after
   the last one, showing where it lands ("+1:30", "→ 12:40 / 44:00"). Info shows how far the
   recording has got. A recording left part-way resumes there the next time it's played (the
-  place is kept in NVS; within its first 30 s or last minute it starts from the top). Where
+  place is kept in NVS; within its first 30 s or last minute it starts from the top). A
+  stream that ends before the recording's last minute keeps the place too. Where
   the bridge says it was left (`upnp:lastPlaybackPosition`, shared with the DVR's other players)
   comes first. A dot marks recordings not watched yet (`upnp:playbackCount` 0). The board
   asks for the start with a `TimeSeekRange.dlna.org: npt=<seconds>-` request header. A
@@ -110,15 +126,20 @@ The setup page then offers **Back to <network>** for the one just forgotten.
   the screen and keeps it), the picture shape (16:9 or the centre 4:3), Rotation, Backlight
   (20 to 100 %), Dim and Off (on battery, after 30 s or 1, 5 or 10 minutes untouched, and after
   1, 5, 10 or 30 minutes, or never; a touch or key brings it back), Find the bridge again, and
-  Version (the firmware version; tap it for the board's address and the bridge's address,
-  version, how it was found and its whole name).
+  Version & board (the firmware version; tap it for the board's address, the bridge's address,
+  version, how it was found and its whole name, then the board, its display, each chip with its
+  ID and whether it answered, the firmware build, the Wi-Fi signal and channel, the battery,
+  free memory, uptime and why it last started).
 - **Rotation:** by default the screen turns with the board. The motion sensor (QMI8658) says
   which edge is down; the picture turns once the board has stayed that way for a second, and
   not while it lies flat. Settings, the web page and `/api/rotation` set it to auto or a fixed
   0°, 90°, 180° or 270° (the board turned clockwise that far) instead. The touch test always
-  runs the panel's own way up.
+  runs the panel's own way up. On the AMOLED-1.8 only the video turns; the menus stay upright.
 - **Keys:** PWR stops playback, or goes back a folder. Hold PWR for 3 s to power off on battery.
-  VOL+ and VOL- change the volume.
+  VOL+ and VOL- change the volume. On the AMOLED-1.8: PWR (the lower key) does the same and
+  switches the board on; BOOT (the upper key) also stops playback or goes back, and held it turns
+  the volume down 5 % at a time, back up from 0 to 100 and down again, stopping at 50 % the
+  second time round.
 - **Web page and API:** see [below](#web-page-and-api); read-only until Settings → Web control
   says otherwise.
 
@@ -153,9 +174,11 @@ the screen. The API (all `GET` unless shown):
 | Address | What it does | Read-only |
 |---|---|---|
 | `/` | the page (only the status while read-only) | yes |
-| `/api/status` | Wi-Fi, battery, memory, the bridge, playback, Web control and OTA | yes |
+| `/api/status` | the board, Wi-Fi, battery, memory, the bridge, playback, Web control and OTA | yes |
+| `/chips`, `/api/chips` | the board and its chips, their IDs, and what the motion sensor, battery and touch read now | yes |
 | `POST /api/ota` | an app image (`channelstv-<version>-ota.bin`) to flash and restart into | its own switch |
 | `/api/settings?bridge=host[:port]&picture=16x9\|4x3&volume=0..100&brightness=20..100&dim=30s\|1\|5\|10\|never&off=1\|5\|10\|30\|never` | sets any of them; `bridge=` empty goes back to finding it | |
+| `/api/settings?size=WxH&tesync=0\|1` | until the next start: another picture size to ask the bridge for (`0x0`: the board's own), and the AMOLED-1.8's frame timing | |
 | `/api/rescan` | looks for the bridge again | |
 | `/api/browse?id=ID&start=N` | a page of a folder (`0` is the top) | |
 | `/api/search?q=WORDS&start=N` | recordings, movies and shows whose titles hold every word; `{"no_search":true}` if the bridge can't search (the page then looks through its folders) | |
@@ -163,7 +186,7 @@ the screen. The API (all `GET` unless shown):
 | `/api/seek?by=±seconds` | where a recording is; `by=` seeks it | |
 | `/api/tv` | playback progress and the stream's state | |
 | `/api/touch?gesture=tap\|long\|up\|down\|left\|right&x=&y=` | acts as a finger would; the last touch points | |
-| `/api/screen` | what the screen shows, as a 240x240 BMP | |
+| `/api/screen` | what the screen shows, as a BMP the screen's size | |
 | `/api/rotation?set=auto\|0..3` | the screen's rotation | |
 | `/wifi`, `/api/wifi`, `/api/wifi/scan`, `POST /api/wifi`, `POST /api/wifi/forget` | Wi-Fi setup | while the hotspot is open |
 
@@ -241,8 +264,10 @@ with ESP-IDF v5.4.2. Every push builds, and a `v*` tag publishes a release. The 
 reproducible (`CONFIG_APP_REPRODUCIBLE_BUILD`): the image carries no build paths or dates.
 
 To build it yourself, you need [ESP-IDF](https://docs.espressif.com/projects/esp-idf/en/v5.4.2/esp32s3/get-started/)
-5.4. The other components (LVGL, the H.264 decoder and the audio codecs) come from the ESP
-Component Registry on the first build.
+5.4. The other components (LVGL, the display and touch drivers, `esp_h264` and the audio codecs)
+come from the ESP Component Registry on the first build, and
+[VideoJet](https://github.com/hdhrgit/VideoJet) (Apache-2.0) from git, pinned to a commit in
+[`main/idf_component.yml`](main/idf_component.yml).
 
 ```sh
 . $IDF_PATH/export.sh
@@ -267,14 +292,14 @@ and connects.
 |------|--------------|
 | `main/main.c` | Start-up, Wi-Fi, keys, power management, rollback |
 | `main/setup.c`, `main/setup.html` | The Wi-Fi setup hotspot, its DNS server and page |
-| `main/board.c` | Board bring-up: display, touch, speaker codec, keys, battery |
+| `main/board.c` | Board bring-up for each board: display, touch, speaker codec, keys, battery, the chip list |
 | `main/bridge.c` | SSDP discovery, the bridge's description, ContentDirectory Browse (SOAP, DIDL-Lite) |
 | `main/stream.c` | The HTTP stream: read-ahead ring, reconnects, catching up with the live edge |
 | `main/ts.c` | MPEG-TS demuxer (PAT, PMT, PES) and the H.264 SPS size |
 | `main/tv.c` | Playback: demuxer, decoder and draw tasks, A/V sync on the audio clock |
-| `main/h264dec.c` | H.264 decoding (Espressif's `esp_h264`) and YUV to RGB565 conversion |
+| `main/h264dec.c` | H.264 decoding (VideoJet, or Espressif's `esp_h264` in menuconfig) and YUV to RGB565 conversion, turned and stretched for a sideways picture |
 | `main/player.c` | AAC decoding, mono mix, resampling, the speaker |
 | `main/ui.c` | LVGL screens |
-| `main/web.c`, `main/index.html` | Web page and API |
+| `main/web.c`, `main/index.html`, `main/chips.html` | Web page, the board and chips page, and the API |
 
 The text font is DejaVu Sans (`main/DejaVuSans.ttf`), under its own free license.

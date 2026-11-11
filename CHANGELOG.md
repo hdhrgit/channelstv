@@ -1,5 +1,33 @@
 # Changelog
 
+## Unreleased
+
+- The Waveshare ESP32-S3-Touch-AMOLED-1.8 (V1: SH8601 and FT3168; V2: CO5300 and CST816), with
+  the same image as the 1.54: the board is told apart at start-up. Its panel, touch, AXP2101
+  power chip (battery, charging, power-off), IO expander and keys are set up for it.
+- On the AMOLED-1.8 the menus are scaled to its screen, six rows a page under a heading as tall as
+  a row; the board asks the bridge for a 368x206 picture (320x240 for the centre 4:3).
+- On the AMOLED-1.8 video turns sideways with the board, stretched across the panel's whole height;
+  the menus stay upright. Video frames are written behind the panel's refresh, timed by its
+  tearing-effect line; `/api/settings?tesync=0|1` switches that until the next start.
+- AMOLED-1.8 keys: PWR stops playback or goes back, held 3 s powers off, and switches the board on;
+  BOOT also goes back, and held steps the volume down and round, stopping at 50 % the second time.
+- H.264 decoding with [VideoJet](https://github.com/hdhrgit/VideoJet) (Apache-2.0), fetched by
+  the component manager from git, pinned to a commit; `esp_h264` stays selectable in
+  menuconfig. `/api/perf` shows the decoder's timings.
+- Settings → Version & board: the board, its display and each chip with its ID, the firmware build,
+  the Wi-Fi signal and channel, the battery, free memory, uptime and why it last started. The web
+  page links a Board and chips page (`/chips`, `/api/chips`); `/api/status` names the board.
+- A quick flick slides through many pages, with the page number large, and fetches only the page
+  it stops on; a tap stops it.
+- The last page of a folder shows its last full page of rows, and coming back up from a folder
+  keeps each folder's own count.
+- A page turn keeps the rows on the screen until the next page comes, instead of blanking them.
+- The heading's page number, battery and Wi-Fi take only the room their text needs.
+- Wi-Fi joins the strongest access point of its network, moves to a much stronger one when weak
+  and idle, and the signal shown is smoothed.
+- A recording whose stream ends before its last minute keeps its place to resume from.
+
 ## v0.4.0 (2026-11-08)
 
 - The centre 4:3 picture comes from the `esp32` profile with the bridge's stream overrides
