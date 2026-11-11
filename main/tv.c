@@ -365,6 +365,7 @@ static void draw_task(void *arg)
         if (!s_stop && (now_ms <= fr.due_ms + s_frame_us / 1000 || first)) {
             int64_t a = esp_timer_get_time();
             s_drstate = "drawing";
+            h264dec_ready(s_fb[fr.buf]);
             if (!overlay_on) {
                 draw_frame(panel, s_strip, s_fb[fr.buf], fr.w, fr.h, board_video_rotation());
             }
@@ -1150,6 +1151,7 @@ static void tv_video_task(void *arg)
         s_perf_n++;
         if (s_perf_hashing && s_hash_n < HASH_N) {
             s_perf_hash[s_hash_n].pts = pts;
+            h264dec_ready(s_fb[fr.buf]);
             s_perf_hash[s_hash_n].hash = fnv1a(s_fb[fr.buf], w * h * 3 / 2);
             s_hash_n++;
         }

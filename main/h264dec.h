@@ -18,6 +18,9 @@ void h264dec_close(h264dec_t *d);
 // w) and returns 1; 0 if no picture came out, -1 on a decoder error. convert_us, if given,
 // gets the time the copy took.
 int h264dec_frame(h264dec_t *d, const uint8_t *data, int len, uint8_t *out, int w, int h, int64_t *convert_us);
+// With VideoJet the copy into out finishes on core 1 after h264dec_frame returns, while the next
+// frame decodes: wait for it before reading out
+void h264dec_ready(const uint8_t *out);
 
 // True if the chunk holds a keyframe (IDR slice), where decoding can start afresh.
 bool h264_is_keyframe(const uint8_t *data, int len);

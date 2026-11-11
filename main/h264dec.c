@@ -13,6 +13,8 @@
 #include "sdkconfig.h"
 #if CONFIG_CHANNELSTV_DEC_VIDEOJET
 #include "videojet.h"
+#include "freertos/FreeRTOS.h"
+#include "freertos/task.h"
 #else
 #include "esp_h264_dec_sw.h"
 #endif
@@ -20,6 +22,13 @@
 struct h264dec {
 #if CONFIG_CHANNELSTV_DEC_VIDEOJET
     vj_decoder_t *dec;
+    // the copy of the latest frame into its output buffer, done by a task on core 1 while core 0
+    // decodes the next frame (hold mode keeps the frame unchanged until then)
+    TaskHandle_t copier;
+    vj_frame_t job;
+    uint8_t *job_out;
+    int job_w, job_h;
+    volatile bool quit;
 #else
     esp_h264_dec_handle_t dec;
 #endif
@@ -259,13 +268,66 @@ void h264dec_init(void)
 }
 
 #if CONFIG_CHANNELSTV_DEC_VIDEOJET
+// The output being copied into (NULL when done) and who waits for it: one decoder at a time
+static uint8_t *volatile s_pending;
+static TaskHandle_t volatile s_waiter;
+
+// The visible w x h of f as compact I420 (stride w), from the top left
+static void frame_copy(const vj_frame_t *f, uint8_t *out, int w, int h)
+{
+    uint8_t *ou = out + w * h, *ov = ou + (w / 2) * (h / 2);
+    for (int y = 0; y < h; y++) {
+        memcpy(out + y * w, f->y + y * f->y_stride, w);
+    }
+    for (int y = 0; y < h / 2; y++) {
+        memcpy(ou + y * (w / 2), f->u + y * f->uv_stride, w / 2);
+        memcpy(ov + y * (w / 2), f->v + y * f->uv_stride, w / 2);
+    }
+}
+
+static void copier_task(void *arg)
+{
+    h264dec_t *d = arg;
+    while (true) {
+        ulTaskNotifyTake(pdTRUE, portMAX_DELAY);
+        if (d->quit) {
+            break;
+        }
+        frame_copy(&d->job, d->job_out, d->job_w, d->job_h);
+        s_pending = NULL;
+        TaskHandle_t w = s_waiter;
+        if (w) {
+            xTaskNotifyGive(w);
+        }
+    }
+    d->copier = NULL;
+    vTaskDeleteWithCaps(NULL);
+}
+
+// Waits for the copy into out (any copy with out NULL) to be done
+static void copy_wait(const uint8_t *out)
+{
+    while (s_pending && (!out || s_pending == out)) {
+        s_waiter = xTaskGetCurrentTaskHandle();
+        if (s_pending && (!out || s_pending == out)) {
+            ulTaskNotifyTake(pdTRUE, pdMS_TO_TICKS(5));
+        }
+        s_waiter = NULL;
+    }
+}
+
 h264dec_t *h264dec_open(void)
 {
     tables_init();
     h264dec_t *d = calloc(1, sizeof(*d));
     if (d && !(d->dec = vj_decoder_create())) {
         free(d);
-        d = NULL;
+        return NULL;
+    }
+    // below the drawer (10) and the sound (9) on core 1; stack in PSRAM, it only calls memcpy
+    if (d && vj_decoder_set_hold(d->dec, true) &&
+        xTaskCreatePinnedToCoreWithCaps(copier_task, "fcopy", 2048, d, 8, &d->copier, 1, MALLOC_CAP_SPIRAM) != pdPASS) {
+        d->copier = NULL;
     }
     return d;
 }
@@ -273,9 +335,22 @@ h264dec_t *h264dec_open(void)
 void h264dec_close(h264dec_t *d)
 {
     if (d) {
+        copy_wait(NULL);
+        if (d->copier) {
+            d->quit = true;
+            xTaskNotifyGive(d->copier);
+            while (d->copier) {
+                vTaskDelay(1);
+            }
+        }
         vj_decoder_destroy(d->dec);
         free(d);
     }
+}
+
+void h264dec_ready(const uint8_t *out)
+{
+    copy_wait(out);
 }
 
 int h264dec_frame(h264dec_t *d, const uint8_t *data, int len, uint8_t *out, int w, int h, int64_t *convert_us)
@@ -303,14 +378,17 @@ int h264dec_frame(h264dec_t *d, const uint8_t *data, int len, uint8_t *out, int 
             return -1;
         }
         int64_t a = esp_timer_get_time();
-        // the visible w x h as compact I420 (stride w), from the top left as before
-        uint8_t *ou = out + w * h, *ov = ou + (w / 2) * (h / 2);
-        for (int y = 0; y < h; y++) {
-            memcpy(out + y * w, f.y + y * f.y_stride, w);
-        }
-        for (int y = 0; y < h / 2; y++) {
-            memcpy(ou + y * (w / 2), f.u + y * f.uv_stride, w / 2);
-            memcpy(ov + y * (w / 2), f.v + y * f.uv_stride, w / 2);
+        // the frame before this one is no longer kept after this call: its copy must be done
+        copy_wait(NULL);
+        if (d->copier) {
+            d->job = f;
+            d->job_out = out;
+            d->job_w = w;
+            d->job_h = h;
+            s_pending = out;
+            xTaskNotifyGive(d->copier);
+        } else {
+            frame_copy(&f, out, w, h);
         }
         if (convert_us) {
             *convert_us = esp_timer_get_time() - a;
@@ -321,6 +399,11 @@ int h264dec_frame(h264dec_t *d, const uint8_t *data, int len, uint8_t *out, int 
 }
 
 #else
+void h264dec_ready(const uint8_t *out)
+{
+    (void)out;
+}
+
 h264dec_t *h264dec_open(void)
 {
     tables_init();
