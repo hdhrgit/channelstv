@@ -47,6 +47,10 @@ void bridge_set_picture(const char *shape);
 // to try until the next restart.
 void bridge_size(int *w, int *h);
 void bridge_set_size(int w, int h);
+// The frame rate the board asks the bridge for: 15, 20 or 24, or 0 for the bridge's own (24).
+// Saved in NVS.
+int bridge_fps(void);
+void bridge_set_fps(int fps);
 
 typedef struct {
     char id[80];

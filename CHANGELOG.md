@@ -27,6 +27,9 @@
 - Wi-Fi joins the strongest access point of its network, moves to a much stronger one when weak
   and idle, and the signal shown is smoothed.
 - A recording whose stream ends before its last minute keeps its place to resume from.
+- Settings: Frame rate (auto, 15, 20 or 24 fps), also on the web page and in `/api/settings`
+  (`fps=`). The board asks the bridge for that rate (`fps=` on its stream requests); auto leaves
+  it to the bridge (24). 15 fps is plenty for news and needs about a third less decoding.
 
 ## v0.4.1 (2026-11-12)
 

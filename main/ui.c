@@ -279,7 +279,7 @@ static bool settings_under_note(void)
     return s_note && !lv_obj_has_flag(s_note, LV_OBJ_FLAG_HIDDEN) && !lv_obj_has_flag(s_row[ROWS - 1], LV_OBJ_FLAG_HIDDEN);
 }
 
-enum { SET_TOUCH, SET_PICTURE, SET_ROTATION, SET_BRIGHT, SET_DIM, SET_OFF, SET_OTA, SET_WEB, SET_FIND, SET_VERSION, SET_N };
+enum { SET_TOUCH, SET_PICTURE, SET_FPS, SET_ROTATION, SET_BRIGHT, SET_DIM, SET_OFF, SET_OTA, SET_WEB, SET_FIND, SET_VERSION, SET_N };
 
 // The first item on a page of a folder of total items: the last page shows the last full
 // page's worth instead of a few rows (it overlaps the page before).
@@ -292,7 +292,7 @@ static int page_first(int page, int total)
 // Settings, a page at a time like any folder.
 static void settings_rows(void)
 {
-    static const char *const titles[SET_N] = {"Touch test", "Picture", "Rotation", "Backlight", "Dim", "Off",
+    static const char *const titles[SET_N] = {"Touch test", "Picture", "Frame rate", "Rotation", "Backlight", "Dim", "Off",
                                               "OTA updates", "Web control", "Find the bridge again", "Version"};
     static const char *const web[] = {"full", "read-only", "off"};
     static const char *const rotations[] = {"auto", "0\u00b0", "90\u00b0", "180\u00b0", "270\u00b0"};
@@ -304,6 +304,12 @@ static void settings_rows(void)
         snprintf(e->id, sizeof(e->id), "#set%d", k);
         if (k == SET_PICTURE) {
             snprintf(e->title, sizeof(e->title), "Picture: %s", !strcmp(bridge_picture(), "4x3") ? "4:3 centre" : "16:9");
+        } else if (k == SET_FPS) {
+            if (bridge_fps()) {
+                snprintf(e->title, sizeof(e->title), "Frame rate: %d fps", bridge_fps());
+            } else {
+                strlcpy(e->title, "Frame rate: auto", sizeof(e->title));
+            }
         } else if (k == SET_WEB) {
             snprintf(e->title, sizeof(e->title), "Web control: %s", web[app_web_mode()]);
         } else if (k == SET_OTA) {
@@ -1463,6 +1469,10 @@ static void activate_row(int i)
             break;
         case SET_PICTURE:
             bridge_set_picture(!strcmp(bridge_picture(), "4x3") ? "16x9" : "4x3");
+            settings_rows();
+            break;
+        case SET_FPS: // auto, 15, 20, 24, auto, ...
+            bridge_set_fps(!bridge_fps() ? 15 : bridge_fps() == 15 ? 20 : bridge_fps() == 20 ? 24 : 0);
             settings_rows();
             break;
         case SET_ROTATION: // auto, 0, 90, 180, 270, auto, ...

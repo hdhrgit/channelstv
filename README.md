@@ -123,7 +123,8 @@ The setup page then offers **Back to <network>** for the one just forgotten.
   asks for the start with a `TimeSeekRange.dlna.org: npt=<seconds>-` request header. A
   recording offered without time seek plays from the start to the end.
 - **Settings:** Touch test (tap five dots; the board works out how the touch panel lines up with
-  the screen and keeps it), the picture shape (16:9 or the centre 4:3), Rotation, Backlight
+  the screen and keeps it), the picture shape (16:9 or the centre 4:3), Frame rate (auto, 15,
+  20 or 24 fps: what the board asks the bridge for; auto is the bridge's 24), Rotation, Backlight
   (20 to 100 %), Dim and Off (on battery, after 30 s or 1, 5 or 10 minutes untouched, and after
   1, 5, 10 or 30 minutes, or never; a touch or key brings it back), Find the bridge again, and
   Version & board (the firmware version; tap it for the board's address, the bridge's address,
@@ -167,7 +168,7 @@ which works the same way. While the setup hotspot is open, its page and `/api/wi
 whatever Web control says.
 
 With Web control **full**, the page shows the status, browses the bridge's folders, searches
-titles and plays from them, sets the bridge address, the picture shape, the rotation, the
+titles and plays from them, sets the bridge address, the picture shape, the frame rate, the rotation, the
 backlight, when the screen dims and goes off on battery, and the volume, and shows a picture of
 the screen. The API (all `GET` unless shown):
 
@@ -177,7 +178,7 @@ the screen. The API (all `GET` unless shown):
 | `/api/status` | the board, Wi-Fi, battery, memory, the bridge, playback, Web control and OTA | yes |
 | `/chips`, `/api/chips` | the board and its chips, their IDs, and what the motion sensor, battery and touch read now | yes |
 | `POST /api/ota` | an app image (`channelstv-<version>-ota.bin`) to flash and restart into | its own switch |
-| `/api/settings?bridge=host[:port]&picture=16x9\|4x3&volume=0..100&brightness=20..100&dim=30s\|1\|5\|10\|never&off=1\|5\|10\|30\|never` | sets any of them; `bridge=` empty goes back to finding it | |
+| `/api/settings?bridge=host[:port]&picture=16x9\|4x3&fps=auto\|15\|20\|24&volume=0..100&brightness=20..100&dim=30s\|1\|5\|10\|never&off=1\|5\|10\|30\|never` | sets any of them; `bridge=` empty goes back to finding it | |
 | `/api/settings?size=WxH&tesync=0\|1` | until the next start: another picture size to ask the bridge for (`0x0`: the board's own), and the AMOLED-1.8's frame timing | |
 | `/api/rescan` | looks for the bridge again | |
 | `/api/browse?id=ID&start=N` | a page of a folder (`0` is the top) | |
