@@ -38,8 +38,28 @@ static uint16_t *s_r, *s_g, *s_b;
 // 0 = as encoded (added to luma).
 static int s_sat = 100, s_contrast = 100, s_bright = 0;
 
+// The PIE version of the quarter turn (yuv_pie.S), for saturation and contrast 100: its constants,
+// 8 lanes each (see there), the brightness among them
+typedef struct {
+    const uint8_t *y, *u, *v;
+    uint16_t *o;
+    int w, unused, kx, step, cols;
+    const int16_t *k;
+    void *tmp;
+    int swap;
+} yuv_pie_job_t;
+void yuv_pie_turned(const yuv_pie_job_t *j);
+static int16_t s_pie_k[15][8] __attribute__((aligned(16)));
+static int32_t s_pie_tmp[4] __attribute__((aligned(16)));
+
 static void tables_build(void)
 {
+    static const int16_t k[15] = {128, 153, -208, 4, 1, -100, 16, 42, 0, 255, 0xf8, 1, 0x1c, 8, 1};
+    for (int i = 0; i < 15; i++) {
+        for (int l = 0; l < 8; l++) {
+            s_pie_k[i][l] = i == 8 ? s_bright : k[i];
+        }
+    }
     for (int i = 0; i < 256; i++) {
         // luma: studio range to full, then contrast around mid-grey and brightness
         int y = (298 * (i - 16)) >> 8;
@@ -117,10 +137,12 @@ void h264_i420_rows_to_rgb565be(const uint8_t *py, const uint8_t *pu, const uint
     }
 }
 
-void h264_i420_turned_to_rgb565be(const uint8_t *py, const uint8_t *pu, const uint8_t *pv, int w, int h, int rot,
-                                  int first, int lines, uint16_t *out)
+// Columns [x0, x1) of a turned strip, the table way
+static void turned_c(const uint8_t *py, const uint8_t *pu, const uint8_t *pv, int w, board_turn_t t, int x0, int x1,
+                     uint16_t *out)
 {
-    board_turn_t t = board_turn(w, h, rot, first, lines);
+    t.x0 = x0;
+    t.x1 = x1;
     for (int y = t.y0; y < t.y1; y += 2) {
         const uint8_t *y0 = py + y * w, *y1 = y0 + w;
         const uint8_t *u = pu + (y / 2) * (w / 2), *v = pv + (y / 2) * (w / 2);
@@ -137,6 +159,33 @@ void h264_i420_turned_to_rgb565be(const uint8_t *py, const uint8_t *pu, const ui
             c = s_y[y1[x + 1]];
             p[t.kx + t.ky] = s_r[c + r] | s_g[c + g] | s_b[c + b];
         }
+    }
+}
+
+void h264_i420_turned_to_rgb565be(const uint8_t *py, const uint8_t *pu, const uint8_t *pv, int w, int h, int rot,
+                                  int first, int lines, uint16_t *out)
+{
+    board_turn_t t = board_turn(w, h, rot, first, lines);
+    int x = t.x0;
+    // a quarter turn either way with the colours as encoded: PIE, 8 columns at a time (4 for a tail), each
+    // pixel pair of a column one aligned word
+    if ((rot & 1) && s_sat == 100 && s_contrast == 100 && !(t.x0 & 3) && !(w & 7) && !(h & 1) && !((uintptr_t)out & 3)) {
+        int ky = t.ky; // +1 (rot 1) or -1 (rot 3)
+        int cols = (t.x1 - x) & ~3;
+        yuv_pie_job_t j = {
+            .w = w, .kx = 2 * t.kx, .step = 16 * t.kx, .cols = cols, .k = &s_pie_k[0][0], .tmp = s_pie_tmp, .swap = ky < 0,
+        };
+        for (int y = t.y0; y < t.y1; y += 2) {
+            j.y = py + y * w + x;
+            j.u = pu + (y / 2) * (w / 2) + x / 2;
+            j.v = pv + (y / 2) * (w / 2) + x / 2;
+            j.o = out + t.k0 + t.kx * x + ky * y + (ky < 0 ? -1 : 0);
+            yuv_pie_turned(&j);
+        }
+        x += cols;
+    }
+    if (x < t.x1) {
+        turned_c(py, pu, pv, w, t, x, t.x1, out);
     }
 }
 

@@ -991,7 +991,8 @@ static void tv_video_task(void *arg)
     RAM_AT(1);
     uint8_t *au = heap_caps_malloc(MAX_FRAME_BYTES + AU_HEAD, MALLOC_CAP_SPIRAM);
     for (int i = 0; i < NUM_FB; i++) {
-        s_fb[i] = heap_caps_aligned_calloc(64, 1, LCD_W * LCD_H * 3 / 2, MALLOC_CAP_SPIRAM);
+        // + 64: the PIE quarter turn reads a few bytes past a 4-column tail at the picture's edge
+        s_fb[i] = heap_caps_aligned_calloc(64, 1, LCD_W * LCD_H * 3 / 2 + 64, MALLOC_CAP_SPIRAM);
     }
     s_free_q = xQueueCreate(NUM_FB, sizeof(int));
     s_full_q = xQueueCreate(NUM_FB + 4, sizeof(frame_t)); // + the end marker and idle ticks

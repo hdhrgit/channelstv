@@ -1,4 +1,4 @@
-idf_component_register(SRCS "main.c" "board.c" "bridge.c" "h264dec.c" "player.c" "rotate.c" "setup.c" "stream.c" "ts.c" "tv.c" "ui.c" "web.c"
+idf_component_register(SRCS "main.c" "board.c" "bridge.c" "h264dec.c" "yuv_pie.S" "player.c" "rotate.c" "setup.c" "stream.c" "ts.c" "tv.c" "ui.c" "web.c"
                        INCLUDE_DIRS "."
                        REQUIRES esp_driver_i2c esp_driver_i2s esp_driver_gpio esp_driver_ledc esp_driver_spi
                                 esp_driver_usb_serial_jtag esp_driver_tsens esp_lcd esp_wifi esp_netif nvs_flash lwip
