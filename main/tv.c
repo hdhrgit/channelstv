@@ -1049,8 +1049,9 @@ static void tv_video_task(void *arg)
     s_clk.last_at_us = esp_timer_get_time();
     s_draw_running = true;
     // its stack in internal RAM: the colour conversion's spills to a PSRAM stack cost a sideways
-    // frame several ms
-    if (xTaskCreatePinnedToCoreWithCaps(draw_task, "tv_draw", 4096, NULL, 8, &s_draw_task, 1, MALLOC_CAP_INTERNAL) != pdPASS) {
+    // frame several ms. Above the sound's task (9): that one cut into each frame's drawing; it
+    // still has the time between frames and the speaker's ~90 ms of DMA buffers.
+    if (xTaskCreatePinnedToCoreWithCaps(draw_task, "tv_draw", 4096, NULL, 10, &s_draw_task, 1, MALLOC_CAP_INTERNAL) != pdPASS) {
         s_draw_running = false;
         strcpy(s_error, "out of RAM for the draw task");
         s_stop = true;
