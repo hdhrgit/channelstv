@@ -734,6 +734,8 @@ void web_apply(void)
     }
     httpd_config_t cfg = HTTPD_DEFAULT_CONFIG();
     cfg.stack_size = 8192;
+    // above the H.264 decoder (7): a board that can't keep up with a stream still answers
+    cfg.task_priority = 8;
     cfg.max_uri_handlers = 26;
     cfg.recv_wait_timeout = 15;
     // a browser keeps several connections open per page: close the idlest instead of refusing

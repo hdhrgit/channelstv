@@ -362,7 +362,9 @@ static void draw_task(void *arg)
             vTaskDelay(pdMS_TO_TICKS(fr.due_ms - now_ms > 5 ? fr.due_ms - now_ms - 2 : 1));
             now_ms = clock_ms(&s_clk);
         }
-        if (!s_stop && (now_ms <= fr.due_ms + s_frame_us / 1000 || first)) {
+        // a late frame goes only when a newer one waits: behind the clock the picture slows down
+        // instead of dropping everything
+        if (!s_stop && (now_ms <= fr.due_ms + s_frame_us / 1000 || first || !uxQueueMessagesWaiting(s_full_q))) {
             int64_t a = esp_timer_get_time();
             s_drstate = "drawing";
             h264dec_ready(s_fb[fr.buf]);
@@ -1060,6 +1062,7 @@ static void tv_video_task(void *arg)
     }
     RAM_AT(4);
     int w = s_pic_w, h = s_pic_h, decoded = 0, undecodable = 0;
+    bool behind = false; // skipping to the next keyframe
     int64_t dec_us = 0;
     for (; !s_stop && n > AU_HEAD; n = next_au(au, true)) {
         int64_t pts;
@@ -1109,6 +1112,16 @@ static void tv_video_task(void *arg)
             break;
         }
         frame_t fr = {.due_ms = m->base_ms + pts_diff(pts, m->base_pts) / 90};
+        // more than half a second behind the clock: the frames up to the next keyframe go undecoded,
+        // and the picture picks up again from there (each frame needs the one before, so not sooner)
+        if (s_preroll_done && decoded && clock_ms(&s_clk) > fr.due_ms + 500) {
+            behind = true;
+        }
+        if (behind && !key) {
+            s_skipped++;
+            continue;
+        }
+        behind = false;
         s_vstate = "waiting for a frame buffer";
         // all of them wait for the clock: before the start that's the pre-roll filling up
         while (!s_stop && !xQueueReceive(s_free_q, &fr.buf, pdMS_TO_TICKS(100))) {
