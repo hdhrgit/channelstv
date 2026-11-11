@@ -1137,8 +1137,8 @@ static void seek_now(void)
     start_play(s_play_base, s_play_title, false, to);
 }
 
-// While a recording plays, where it is goes to NVS now and then, and when it ends: at the end
-// it's forgotten, otherwise the next start resumes there.
+// While a recording plays, where it is goes to NVS now and then, and when it ends: at its real
+// end it's forgotten, otherwise the next start resumes there.
 static void resume_tick(void)
 {
     static char id[80];
@@ -1157,7 +1157,9 @@ static void resume_tick(void)
             next = now + RESUME_EVERY_US;
         }
     } else if (at_s >= 0 && !tv_playing()) {
-        resume_save(id, strcmp(tv_end_reason(), "end") ? at_s : 0, dur_s);
+        // an end before the last minute (the bridge's stream can end early) keeps the place, so
+        // play starts there again; resume_save forgets it within the last minute
+        resume_save(id, strcmp(tv_end_reason(), "end") || dur_s ? at_s : 0, dur_s);
         at_s = -1;
         id[0] = '\0';
     }
