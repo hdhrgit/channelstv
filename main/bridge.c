@@ -37,13 +37,14 @@ static char s_udn[64];
 static const char *s_found_by = "";
 static char s_override[64];
 static bool s_4x3;
+static bool s_full; // the picture fills the larger panel: its middle, cropped to the panel's shape
 static int s_fps;
 static int s_scale = 10;
 static volatile unsigned s_gen;
 static volatile bool s_rescan = true;
 // The bridge's client profile the board asks for, and the overrides it adds for the centre 4:3
 #define PROFILE "esp32"
-#define OVERRIDES_4X3 "w=240&h=192&fit=crop43"
+#define OVERRIDES_4X3 "w=240&h=192&fit=height"
 // What is wrong with that profile ("" when it's fine or couldn't be read), from its /api/state
 static char s_problem[96];
 static char s_bversion[24]; // the bridge's own version, from its /api/state
@@ -93,12 +94,13 @@ void bridge_set_override(const char *host_port)
 
 const char *bridge_picture(void)
 {
-    return s_4x3 ? "4x3" : "16x9";
+    return s_full ? "full" : s_4x3 ? "4x3" : "16x9";
 }
 
 void bridge_set_picture(const char *shape)
 {
     s_4x3 = !strcmp(shape, "4x3");
+    s_full = !strcmp(shape, "full") && LCD_W * LCD_H > 240 * 240;
     nvs_put("picture", bridge_picture());
 }
 
@@ -116,8 +118,11 @@ void bridge_size(int *w, int *h)
 {
     bool big = LCD_W > 240;
     // the panel's width (VideoJet holds 24 fps there, upright and stretched sideways)
-    *w = s_pic_w ? s_pic_w : big ? (s_4x3 ? 320 : LCD_W) : 0;
-    *h = s_pic_h ? s_pic_h : big ? (s_4x3 ? 240 : (LCD_W * 9 / 16) & ~1) : 0;
+    // the screen as the picture will be drawn: across the panel's height when the video turns
+    bool side = (board_video_rotation() & 1) && LCD_W != LCD_H;
+    int sw = side ? LCD_H : LCD_W, sh = side ? LCD_W : LCD_H;
+    *w = s_pic_w ? s_pic_w : big ? (s_4x3 ? 320 : sw) : 0;
+    *h = s_pic_h ? s_pic_h : big ? (s_4x3 ? 240 : sh) : 0;
     if (!s_pic_w && big && bridge_scale() > 10) {
         int sw = (*w * 10 / bridge_scale()) & ~7; // a multiple of 8 for the PIE path
         *h = (*h * sw / *w) & ~1;
@@ -583,6 +588,7 @@ void bridge_start(bool (*online)(void))
     char p[8] = "";
     nvs_str("picture", p, sizeof(p));
     s_4x3 = !strcmp(p, "4x3");
+    s_full = !strcmp(p, "full") && LCD_W * LCD_H > 240 * 240;
     nvs_str("scale", p, sizeof(p));
     s_scale = atoi(p) == 15 || atoi(p) == 20 ? atoi(p) : 10;
     nvs_str("fps", p, sizeof(p));
@@ -653,7 +659,10 @@ static void with_profile(const char *url, char *out, size_t len)
     bridge_size(&w, &h);
     if (w && h && !strstr(out, "fit=")) {
         size_t n = strlen(out);
-        snprintf(out + n, len - n, "%cw=%d&h=%d&fit=%s", strchr(out, '?') ? '&' : '?', w, h, s_4x3 ? "crop43" : "scale");
+        // the bridge fits the picture into w x h by its own shape: the whole of it (width), or its
+        // middle cropped to w x h (height)
+        snprintf(out + n, len - n, "%cw=%d&h=%d&fit=%s", strchr(out, '?') ? '&' : '?', w, h,
+                 s_4x3 || s_full || s_pic_w ? "height" : "width");
     } else if (s_4x3 && !strstr(out, "fit=")) {
         size_t n = strlen(out);
         snprintf(out + n, len - n, "%c" OVERRIDES_4X3, strchr(out, '?') ? '&' : '?');

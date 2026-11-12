@@ -318,7 +318,8 @@ static void settings_rows(void)
         memset(e, 0, sizeof(*e));
         snprintf(e->id, sizeof(e->id), "#set%d", k);
         if (k == SET_PICTURE) {
-            snprintf(e->title, sizeof(e->title), "Picture: %s", !strcmp(bridge_picture(), "4x3") ? "4:3 centre" : "16:9");
+            const char *p = bridge_picture();
+            snprintf(e->title, sizeof(e->title), "Picture: %s", !strcmp(p, "4x3") ? "4:3 centre" : !strcmp(p, "full") ? "fill screen" : "16:9");
         } else if (k == SET_FPS) {
             snprintf(e->title, sizeof(e->title), "Frame rate: %d fps", bridge_fps());
         } else if (k == SET_SCALE) {
@@ -1483,7 +1484,9 @@ static void activate_row(int i)
             s_cal_step = 0;
             break;
         case SET_PICTURE:
-            bridge_set_picture(!strcmp(bridge_picture(), "4x3") ? "16x9" : "4x3");
+            // 16:9, 4:3 centre, and on the larger panel the whole screen filled
+            bridge_set_picture(!strcmp(bridge_picture(), "16x9") ? "4x3"
+                               : !strcmp(bridge_picture(), "4x3") && LCD_W * LCD_H > 240 * 240 ? "full" : "16x9");
             settings_rows();
             break;
         case SET_FPS: // 24, 15, 20, 24, ...
