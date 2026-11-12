@@ -28,6 +28,11 @@
   and idle, and the signal shown is smoothed.
 - A recording whose stream ends before its last minute keeps its place to resume from.
 
+## v0.4.1 (2026-11-12)
+
+- With no bridge found (or not answering), the top screen still has a Settings row under the
+  note, so Web control can be set to full and the bridge's address entered on the web page.
+
 ## v0.4.0 (2026-11-08)
 
 - The centre 4:3 picture comes from the `esp32` profile with the bridge's stream overrides

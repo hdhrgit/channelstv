@@ -271,6 +271,14 @@ static bool at_local(void)
     return at_settings() || at_version();
 }
 
+// The Settings row shown under the note when there's no bridge (note_settings_row).
+static const cd_entry_t s_settings_entry = {.id = SETTINGS_ID, .title = "Settings", .container = true, .children = -1};
+
+static bool settings_under_note(void)
+{
+    return s_note && !lv_obj_has_flag(s_note, LV_OBJ_FLAG_HIDDEN) && !lv_obj_has_flag(s_row[ROWS - 1], LV_OBJ_FLAG_HIDDEN);
+}
+
 enum { SET_TOUCH, SET_PICTURE, SET_ROTATION, SET_BRIGHT, SET_DIM, SET_OFF, SET_OTA, SET_WEB, SET_FIND, SET_VERSION, SET_N };
 
 // The first item on a page of a folder of total items: the last page shows the last full
@@ -1574,8 +1582,12 @@ static void on_gesture(gesture_t g, int x, int y)
                 go_back();
             }
         } else if (s_note && !lv_obj_has_flag(s_note, LV_OBJ_FLAG_HIDDEN)) {
-            bridge_rescan(); // "Try again"
-            request_page();
+            if ((y - HEAD_H) / ROW_H == ROWS - 1 && settings_under_note()) {
+                open_folder(&s_settings_entry);
+            } else {
+                bridge_rescan(); // "Try again"
+                request_page();
+            }
         } else {
             activate_row((y - HEAD_H) / ROW_H);
         }
@@ -1590,7 +1602,7 @@ static void row_highlight(int i)
         lv_obj_set_style_bg_color(s_row[s_pressed_row], lv_color_hex(C_PANEL), 0);
     }
     s_pressed_row = i;
-    if (i >= 0 && i < ROWS && s_view == VIEW_LIST && i < s_count) {
+    if (i >= 0 && i < ROWS && s_view == VIEW_LIST && (i < s_count || (i == ROWS - 1 && settings_under_note()))) {
         lv_obj_set_style_bg_color(s_row[i], lv_color_hex(C_PRESS), 0);
     }
 }
@@ -1650,6 +1662,23 @@ static void note(const char *text, uint32_t color)
     show(s_note, true);
 }
 
+// With no bridge to list, the top level still offers Settings, in its last row, under the note:
+// Web control starts read-only, so the web page can't set the bridge's address until it's changed.
+static void note_settings_row(void)
+{
+    int i = ROWS - 1;
+    show(s_row_cap[i], false);
+    show(s_row_new[i], false);
+    lv_obj_set_style_text_font(s_row_text[i], f22, 0);
+    lv_label_set_long_mode(s_row_text[i], LV_LABEL_LONG_DOT);
+    lv_obj_set_height(s_row_text[i], PR(28));
+    lv_obj_align(s_row_text[i], LV_ALIGN_LEFT_MID, PX(40), 0);
+    lbl(s_row_text[i], s_settings_entry.title);
+    lbl(s_row_icon[i], LV_SYMBOL_SETTINGS);
+    lv_obj_set_style_bg_color(s_row[i], lv_color_hex(C_PANEL), 0);
+    show(s_row[i], true);
+}
+
 // What the bridge search says, when there is nothing to list.
 static void bridge_note(void)
 {
@@ -1665,10 +1694,10 @@ static void bridge_note(void)
         note("Looking for the bridge...", C_DIM);
         return;
     case BRIDGE_NOT_FOUND:
-        snprintf(text, sizeof(text), "No bridge found on the network.\nSet its address on the web page:\nhttp://%s/\n\nTap to try again", net.ip);
+        snprintf(text, sizeof(text), "No bridge found.\nSet its address on\nhttp://%s/\nwith Web control: full.\n\nTap to try again", net.ip);
         break;
     case BRIDGE_UNREACHABLE:
-        snprintf(text, sizeof(text), "The bridge at %s is not reachable.\nChange it on http://%s/\n\nTap to try again",
+        snprintf(text, sizeof(text), "%s\nis not reachable.\nChange it on\nhttp://%s/\nwith Web control: full.\nTap to try again",
                  bridge_override(), net.ip);
         break;
     case BRIDGE_FOUND:
@@ -1676,6 +1705,9 @@ static void bridge_note(void)
         break;
     }
     note(text, C_WARN);
+    if (s_depth == 1) {
+        note_settings_row();
+    }
 }
 
 static void rows_hidden(void)
