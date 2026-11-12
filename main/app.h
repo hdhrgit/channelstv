@@ -21,6 +21,10 @@ void app_set_wifi(const char *ssid, const char *password);
 // Forgets the network and restarts into the setup hotspot. The network is kept as the previous
 // one, which the setup page offers to go back to.
 void app_forget_wifi(void);
+#if CONFIG_CHANNELSTV_WIFI_OUTAGE_TEST
+// The test hook (Kconfig): the next start pretends the saved network is down for that long.
+void app_fake_wifi_outage(int seconds);
+#endif
 // The network forgotten last; false if there is none. password may be NULL.
 bool app_previous_wifi(char *ssid, size_t ssid_len, char *password, size_t pass_len);
 

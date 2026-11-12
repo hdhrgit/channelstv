@@ -663,6 +663,21 @@ static void restart_soon(void *arg)
     esp_restart();
 }
 
+#if CONFIG_CHANNELSTV_WIFI_OUTAGE_TEST
+// ?s=N: restarts, then pretends the saved network is down for N seconds (Kconfig test hook)
+static esp_err_t wifi_outage(httpd_req_t *req)
+{
+    int s = query_int(req, "s", 0);
+    if (s < 30 || s > 900) {
+        return httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "s=30..900");
+    }
+    app_fake_wifi_outage(s);
+    httpd_resp_sendstr(req, "{\"ok\":true}");
+    xTaskCreate(restart_soon, "restart", 2048, NULL, 5, NULL);
+    return ESP_OK;
+}
+#endif
+
 // The body is a raw app image (build/channelstv.bin). It goes to the spare slot and the board
 // reboots into it; main.c rolls back if the new image doesn't reach Wi-Fi in time.
 static esp_err_t ota(httpd_req_t *req)
@@ -742,7 +757,7 @@ void web_apply(void)
     cfg.stack_size = 8192;
     // above the H.264 decoder (7): a board that can't keep up with a stream still answers
     cfg.task_priority = 8;
-    cfg.max_uri_handlers = 26;
+    cfg.max_uri_handlers = 27;
     cfg.recv_wait_timeout = 15;
     // a browser keeps several connections open per page: close the idlest instead of refusing
     cfg.lru_purge_enable = true;
@@ -778,6 +793,9 @@ void web_apply(void)
         {"/api/perf/hashes", HTTP_GET, {perf_hashes, FULL}},
         {"/api/touch", HTTP_GET, {touch, FULL}},
         {"/api/screen", HTTP_GET, {screen, FULL}},
+#if CONFIG_CHANNELSTV_WIFI_OUTAGE_TEST
+        {"/api/wifi/outage", HTTP_GET, {wifi_outage, FULL}},
+#endif
     };
     for (size_t i = 0; i < sizeof(uris) / sizeof(uris[0]); i++) {
         httpd_uri_t u = {.uri = uris[i].uri, .method = uris[i].method, .handler = gate,

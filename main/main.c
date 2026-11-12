@@ -39,6 +39,7 @@ static const char *TAG = "channelstv";
 
 static int s_volume = 60;
 static volatile bool s_connected;
+static volatile bool s_joined; // on the network at least once since this start
 static char s_ip[16] = "";
 
 // ---------------------------------------------------------------- volume
@@ -312,16 +313,62 @@ static void open_setup(void)
     web_apply(); // the hotspot's page, even with Web control off
 }
 
+#if CONFIG_CHANNELSTV_WIFI_OUTAGE_TEST
+static int64_t s_outage_until_us; // the test hook's pretend outage, see Kconfig
+
+void app_fake_wifi_outage(int seconds)
+{
+    nvs_handle_t h;
+    if (nvs_open("channelstv", NVS_READWRITE, &h) == ESP_OK) {
+        nvs_set_i32(h, "wifi_outage", seconds);
+        nvs_commit(h);
+        nvs_close(h);
+    }
+}
+
+// Read once at start and cleared, so it covers one start only.
+static void outage_load(void)
+{
+    nvs_handle_t h;
+    int32_t s = 0;
+    if (nvs_open("channelstv", NVS_READWRITE, &h) == ESP_OK) {
+        if (nvs_get_i32(h, "wifi_outage", &s) == ESP_OK) {
+            nvs_erase_key(h, "wifi_outage");
+            nvs_commit(h);
+        }
+        nvs_close(h);
+    }
+    if (s >= 30 && s <= 900) {
+        ESP_LOGW(TAG, "test: the saved network is \"down\" for %d s", (int)s);
+        s_outage_until_us = esp_timer_get_time() + s * 1000000LL;
+    }
+}
+#endif
+
+
+// Joins the saved network; during the test hook's pretend outage, only looks again in 5 s.
+static void sta_connect(void)
+{
+#if CONFIG_CHANNELSTV_WIFI_OUTAGE_TEST
+    if (esp_timer_get_time() < s_outage_until_us) {
+        esp_timer_stop(s_retry);
+        esp_timer_start_once(s_retry, 5000000LL);
+        return;
+    }
+#endif
+    esp_wifi_connect();
+}
+
 static void retry(void *arg)
 {
-    esp_wifi_connect();
+    sta_connect();
 }
 
 static void wifi_event(void *arg, esp_event_base_t base, int32_t id, void *data)
 {
     if (base == WIFI_EVENT && id == WIFI_EVENT_STA_START) {
         if (sta_saved()) {
-            esp_wifi_connect();
+            sta_connect();
         }
     } else if (base == WIFI_EVENT && id == WIFI_EVENT_STA_DISCONNECTED) {
         s_connected = false;
@@ -339,11 +386,12 @@ static void wifi_event(void *arg, esp_event_base_t base, int32_t id, void *data)
             return;
         }
         vTaskDelay(pdMS_TO_TICKS(1000));
-        esp_wifi_connect();
+        sta_connect();
     } else if (base == IP_EVENT && id == IP_EVENT_STA_GOT_IP) {
         ip_event_got_ip_t *e = data;
         snprintf(s_ip, sizeof(s_ip), IPSTR, IP2STR(&e->ip_info.ip));
         s_connected = true;
+        s_joined = true;
         ESP_LOGI(TAG, "got ip %s", s_ip);
         // reaching the network proves a freshly flashed image is good
         esp_ota_mark_app_valid_cancel_rollback();
@@ -375,6 +423,9 @@ static void wifi_start(void)
         sta_strongest(&cfg);
         esp_wifi_set_config(WIFI_IF_STA, &cfg);
     }
+#if CONFIG_CHANNELSTV_WIFI_OUTAGE_TEST
+    outage_load();
+#endif
     esp_wifi_start();
     esp_wifi_set_ps(WIFI_PS_MIN_MODEM); // power_task switches it off while something plays
     if (!cfg.sta.ssid[0]) {
@@ -482,12 +533,14 @@ static void console_task(void *arg)
     vTaskDelete(NULL);
 }
 
-// A saved network that isn't there two minutes after start (moved house, new router password):
-// the setup hotspot opens next to it, and the board keeps trying the saved one.
+// A saved network not joined once in the two minutes after start (moved house, new router
+// password, the router still starting after a power cut): the setup hotspot opens next to it, and
+// the board keeps trying the saved one, rejoining and closing the hotspot by itself if it comes
+// back. A network lost after the board was on it this start is only rejoined: no hotspot.
 static void setup_fallback(void *arg)
 {
     wifi_config_t cfg = {0};
-    if (!s_connected && esp_wifi_get_config(WIFI_IF_STA, &cfg) == ESP_OK && cfg.sta.ssid[0]) {
+    if (!s_joined && esp_wifi_get_config(WIFI_IF_STA, &cfg) == ESP_OK && cfg.sta.ssid[0]) {
         ESP_LOGW(TAG, "%s not reachable: setup hotspot", (const char *)cfg.sta.ssid);
         open_setup();
     }

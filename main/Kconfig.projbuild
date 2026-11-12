@@ -25,4 +25,13 @@ config CHANNELSTV_DEC_VIDEOJET
 
 endchoice
 
+config CHANNELSTV_WIFI_OUTAGE_TEST
+    bool "Test hook: pretend the saved Wi-Fi is down after the next start"
+    default n
+    help
+        Adds GET /api/wifi/outage?s=N (Web control full): the board restarts and, for N seconds
+        (30..900), doesn't try to join its saved network, as if the router were off. Its Wi-Fi
+        settings stay as they are, and the next start after that is normal. For testing the setup
+        hotspot that opens when the board hasn't joined two minutes after start. Not for releases.
+
 endmenu
