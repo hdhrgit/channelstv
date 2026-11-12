@@ -604,7 +604,7 @@ void tv_perf_json(char *out, size_t len)
              "{\"decoder\":\"%s\",\"frames\":%d,\"mean_ms\":%.2f,\"p50_ms\":%.2f,\"p95_ms\":%.2f,\"p99_ms\":%.2f,"
              "\"max_ms\":%.2f,\"window_s\":%.1f,\"cpu0_load\":%.1f,\"cpu1_load\":%.1f,\"dec_internal\":%d,"
              "\"dec_psram\":%d,\"int_free\":%u,\"int_min\":%u,\"int_largest\":%u,\"psram_free\":%u,"
-             "\"psram_min\":%u,\"hashes\":%d}",
+             "\"psram_min\":%u,\"psram_largest\":%u,\"hashes\":%d}",
 #if CONFIG_CHANNELSTV_DEC_VIDEOJET
              "videojet",
 #else
@@ -615,7 +615,7 @@ void tv_perf_json(char *out, size_t len)
              (unsigned)heap_caps_get_minimum_free_size(MALLOC_CAP_INTERNAL),
              (unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL),
              (unsigned)heap_caps_get_free_size(MALLOC_CAP_SPIRAM), (unsigned)heap_caps_get_minimum_free_size(MALLOC_CAP_SPIRAM),
-             s_hash_n);
+             (unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_SPIRAM), s_hash_n);
 }
 
 // "pts hash" lines from index from, at most len bytes
