@@ -2034,6 +2034,7 @@ static void setup_view(void)
     show(s_head_back, false);
     show(s_qr, true);
     lbl(s_pageno, "");
+    head_fit();
     head_set("Wi-Fi setup");
     char status[96], text[160];
     setup_status(status, sizeof(status));
@@ -2161,9 +2162,14 @@ static int text_w(lv_obj_t *l)
 }
 
 // The heading's right end, from the right: Wi-Fi, the battery, the page number, each as wide as
-// what it says now; the title takes the rest.
+// what it says now; the title takes the rest. It starts after the back arrow, or without one in
+// line with the rows' icons.
 static void head_fit(void)
 {
+    int left = lv_obj_has_flag(s_head_back, LV_OBJ_FLAG_HIDDEN) ? PX(14) : PX(34);
+    if (lv_obj_get_style_x(s_head, 0) != left) {
+        lv_obj_set_x(s_head, left);
+    }
     int r = PX(6) + text_w(s_wifi) + PX(4), y = PX(9) + HEAD_DY;
     if (s_batt_shown) {
         int bw = text_w(s_batt) + 2;
@@ -2177,7 +2183,7 @@ static void head_fit(void)
         lv_obj_align(s_pageno, LV_ALIGN_TOP_RIGHT, -r, y);
         r += pw + PX(6);
     }
-    int w = LCD_W - PX(34) - r;
+    int w = LCD_W - left - r;
     if (lv_obj_get_style_width(s_head, 0) != w) {
         lv_obj_set_width(s_head, w);
         lv_obj_update_layout(s_head);           // the new width now, not at the next refresh,
