@@ -42,9 +42,10 @@ static int s_fps;
 static int s_scale = 10;
 static volatile unsigned s_gen;
 static volatile bool s_rescan = true;
-// The bridge's client profile the board asks for, and the overrides it adds for the centre 4:3
+// The bridge's client profile the board asks for, and the overrides it adds for the centre 4:3 on
+// the 240x240 panel: crop43, which every bridge with the profile knows
 #define PROFILE "esp32"
-#define OVERRIDES_4X3 "w=240&h=192&fit=height"
+#define OVERRIDES_4X3 "w=240&h=192&fit=crop43"
 // What is wrong with that profile ("" when it's fine or couldn't be read), from its /api/state
 static char s_problem[96];
 static char s_bversion[24]; // the bridge's own version, from its /api/state
@@ -382,7 +383,7 @@ static void check_profiles(const char *base, char *buf)
     // one that can't fit the picture would play it squashed or cut wrong: none at all instead.
     // Its /api/caps lists the fits it knows; a bridge without that goes by its version.
     bool old = false;
-    if (!problem[0]) {
+    if (!problem[0] && LCD_W > 240) { // only the larger panel asks for these fits
         snprintf(url, sizeof(url), "%s/api/caps", base);
         cJSON *caps = http_get(url, buf, DESC_MAX, 4000) > 0 ? cJSON_Parse(buf) : NULL;
         const cJSON *fits = cJSON_GetObjectItem(caps, "fits");

@@ -238,7 +238,7 @@ one, and wants it to transcode to H.264 `baseline`, one slice a frame (`single_s
 reason, and so do the web page and `/api/status` (`bridge.profile_problem`). A stream that still
 won't decode ends with the same message.
 
-The board also needs dlna-bridge 0.99.12 or later, which sizes the picture the way the board asks
+The AMOLED-1.8 also needs dlna-bridge 0.99.12 or later, which sizes the picture the way the board asks
 (`fit=width`, `fit=height`): it looks for those in the bridge's `/api/caps`, or, on a bridge without
 it, goes by the bridge's version. With an older bridge it doesn't play, and the screen and the web page
 say "Update dlna-bridge to 0.99.12 or later" (`/api/status`: `bridge.update` is the version needed).

@@ -89,7 +89,8 @@ bool bridge_profile_problem(char *out, size_t len);
 bool bridge_recheck_profiles(void);
 // The message the screen and the web page show for a wrong profile
 #define BRIDGE_PROFILE_HELP "Bridge needs the esp32 profile, see README"
-// The oldest bridge that fits the picture as the board asks (fit=width / fit=height): one without
+// The oldest bridge that fits the picture as the larger panel asks (fit=width / fit=height; the
+// 240x240 one needs none of it, so it isn't checked there): one without
 // those fits in its /api/caps, or older by its version where it has no /api/caps (an unknown
 // version doesn't count), is a profile problem, with this message instead
 #define BRIDGE_MIN_VERSION "0.99.12"
