@@ -246,6 +246,7 @@ static esp_err_t settings(httpd_req_t *req)
         int w = 0, h = 0;
         sscanf(v, "%dx%d", &w, &h); // "320x180"; "0x0": the board's own
         bridge_set_size(w, h);
+    }
     if (query_str(req, "fps", v, sizeof(v))) {
         bridge_set_fps(atoi(v));
     }
