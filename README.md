@@ -176,6 +176,8 @@ board loosens either. The setup hotspot has no password while it runs.
 
 ## Finding the bridge
 
+The board needs [dlna-bridge](https://github.com/hdhrgit/dlna-bridge) running on the same network.
+
 By default the board finds the bridge itself:
 
 1. It sends an SSDP `M-SEARCH` for `urn:schemas-upnp-org:device:MediaServer:1` and keeps the
