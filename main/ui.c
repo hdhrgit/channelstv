@@ -1694,7 +1694,7 @@ static void bridge_note(void)
         note("Looking for the bridge...", C_DIM);
         return;
     case BRIDGE_NOT_FOUND:
-        snprintf(text, sizeof(text), "No bridge found.\nSet its address on\nhttp://%s/\nwith Web control: full.\n\nTap to try again", net.ip);
+        snprintf(text, sizeof(text), "No dlna-bridge found.\nInstall it, or set its\naddress on\nhttp://%s/\nwith Web control: full.\nTap to try again", net.ip);
         break;
     case BRIDGE_UNREACHABLE:
         snprintf(text, sizeof(text), "%s\nis not reachable.\nChange it on\nhttp://%s/\nwith Web control: full.\nTap to try again",

@@ -32,6 +32,7 @@
 
 - With no bridge found (or not answering), the top screen still has a Settings row under the
   note, so Web control can be set to full and the bridge's address entered on the web page.
+- With no bridge found, the note says to install dlna-bridge.
 
 ## v0.4.0 (2026-11-08)
 
