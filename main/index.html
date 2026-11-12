@@ -64,6 +64,14 @@
     <option value="20">20 fps</option>
     <option value="15">15 fps (enough for news)</option>
   </select>
+  <div id="scalerow" hidden>
+    <label for="scale">Upscaling</label>
+    <select id="scale">
+      <option value="1">off</option>
+      <option value="1.5">1.5x (a smaller picture from the bridge, scaled up)</option>
+      <option value="2">2x</option>
+    </select>
+  </div>
   <label for="rotation">Rotation</label>
   <select id="rotation">
     <option value="auto">Auto (follows how the board is held)</option>
@@ -141,7 +149,7 @@ async function refresh() {
       $('volume').value = s.volume;
       $('volv').textContent = s.volume + '%';
       fetch('/api/rotation').then(r => r.json()).then(r => $('rotation').value = String(r.setting)).catch(() => {});
-      fetch('/api/settings').then(r => r.json()).then(r => { $('fps').value = String(r.fps); $('brightness').value = String(r.brightness); $('dim').value = String(r.dim); $('off').value = String(r.off); }).catch(() => {});
+      fetch('/api/settings').then(r => r.json()).then(r => { $('fps').value = String(r.fps); if (r.scale !== undefined) { $('scalerow').hidden = false; $('scale').value = String(r.scale); } $('brightness').value = String(r.brightness); $('dim').value = String(r.dim); $('off').value = String(r.off); }).catch(() => {});
     }
   } catch (e) {
     $('status').innerHTML = '<dt>Status</dt><dd class="bad">the board doesn\'t answer</dd>';
@@ -150,7 +158,7 @@ async function refresh() {
 
 $('volume').oninput = () => $('volv').textContent = $('volume').value + '%';
 $('save').onclick = async () => {
-  const q = new URLSearchParams({bridge: $('bridge').value.trim(), picture: $('picture').value, fps: $('fps').value, volume: $('volume').value, brightness: $('brightness').value, dim: $('dim').value, off: $('off').value});
+  const q = new URLSearchParams({bridge: $('bridge').value.trim(), picture: $('picture').value, fps: $('fps').value, ...($('scalerow').hidden ? {} : {scale: $('scale').value}), volume: $('volume').value, brightness: $('brightness').value, dim: $('dim').value, off: $('off').value});
   await fetch('/api/settings?' + q);
   await fetch('/api/rotation?set=' + $('rotation').value);
   setTimeout(refresh, 500);

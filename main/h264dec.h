@@ -43,3 +43,6 @@ void h264_i420_turned_to_rgb565be(const uint8_t *py, const uint8_t *pu, const ui
 // panel block is H wide and W tall, and this makes its rows [first, first + lines).
 void h264_i420_scaled_turned_to_rgb565be(const uint8_t *py, const uint8_t *pu, const uint8_t *pv, int w, int h, int W,
                                          int H, int rot, int first, int lines, uint16_t *out);
+// Rows [first, first + lines) of the w x h picture scaled up to W x H upright (nearest pixel)
+void h264_i420_scaled_to_rgb565be(const uint8_t *py, const uint8_t *pu, const uint8_t *pv, int w, int h, int W, int H,
+                                  int first, int lines, uint16_t *out);

@@ -279,7 +279,20 @@ static bool settings_under_note(void)
     return s_note && !lv_obj_has_flag(s_note, LV_OBJ_FLAG_HIDDEN) && !lv_obj_has_flag(s_row[ROWS - 1], LV_OBJ_FLAG_HIDDEN);
 }
 
-enum { SET_TOUCH, SET_PICTURE, SET_FPS, SET_ROTATION, SET_BRIGHT, SET_DIM, SET_OFF, SET_OTA, SET_WEB, SET_FIND, SET_VERSION, SET_N };
+enum { SET_TOUCH, SET_PICTURE, SET_FPS, SET_SCALE, SET_ROTATION, SET_BRIGHT, SET_DIM, SET_OFF, SET_OTA, SET_WEB, SET_FIND, SET_VERSION,
+       SET_N };
+
+// The Settings rows this board shows, in order: Upscaling only on the larger panel
+static int set_rows(int *ids)
+{
+    int n = 0;
+    for (int k = 0; k < SET_N; k++) {
+        if (k != SET_SCALE || LCD_W * LCD_H > 240 * 240) {
+            ids[n++] = k;
+        }
+    }
+    return n;
+}
 
 // The first item on a page of a folder of total items: the last page shows the last full
 // page's worth instead of a few rows (it overlaps the page before).
@@ -292,13 +305,15 @@ static int page_first(int page, int total)
 // Settings, a page at a time like any folder.
 static void settings_rows(void)
 {
-    static const char *const titles[SET_N] = {"Touch test", "Picture", "Frame rate", "Rotation", "Backlight", "Dim", "Off",
+    static const char *const titles[SET_N] = {"Touch test", "Picture", "Frame rate", "Upscaling", "Rotation", "Backlight", "Dim", "Off",
                                               "OTA updates", "Web control", "Find the bridge again", "Version"};
     static const char *const web[] = {"full", "read-only", "off"};
     static const char *const rotations[] = {"auto", "0\u00b0", "90\u00b0", "180\u00b0", "270\u00b0"};
-    int first = page_first(s_stack[s_depth - 1].page, SET_N);
+    int ids[SET_N], n = set_rows(ids);
+    int first = page_first(s_stack[s_depth - 1].page, n);
     s_count = 0;
-    for (int k = first; k < SET_N && s_count < ROWS; k++) {
+    for (int j = first; j < n && s_count < ROWS; j++) {
+        int k = ids[j];
         cd_entry_t *e = &s_entries[s_count++];
         memset(e, 0, sizeof(*e));
         snprintf(e->id, sizeof(e->id), "#set%d", k);
@@ -306,6 +321,9 @@ static void settings_rows(void)
             snprintf(e->title, sizeof(e->title), "Picture: %s", !strcmp(bridge_picture(), "4x3") ? "4:3 centre" : "16:9");
         } else if (k == SET_FPS) {
             snprintf(e->title, sizeof(e->title), "Frame rate: %d fps", bridge_fps());
+        } else if (k == SET_SCALE) {
+            static const char *const scales[] = {"off", "1.5x", "2x"};
+            snprintf(e->title, sizeof(e->title), "Upscaling: %s", scales[(bridge_scale() - 10) / 5]);
         } else if (k == SET_WEB) {
             snprintf(e->title, sizeof(e->title), "Web control: %s", web[app_web_mode()]);
         } else if (k == SET_OTA) {
@@ -334,7 +352,7 @@ static void settings_rows(void)
             strlcpy(e->title, titles[k], sizeof(e->title));
         }
     }
-    s_total = SET_N;
+    s_total = n;
     s_stack[s_depth - 1].total = s_total;
 }
 
@@ -1458,7 +1476,8 @@ static void activate_row(int i)
         return; // rows that only show
     }
     if (at_settings()) {
-        switch (page_first(s_stack[s_depth - 1].page, SET_N) + i) {
+        int ids[SET_N], n = set_rows(ids);
+        switch (ids[page_first(s_stack[s_depth - 1].page, n) + i]) {
         case SET_TOUCH:
             s_view = VIEW_CAL;
             s_cal_step = 0;
@@ -1469,6 +1488,10 @@ static void activate_row(int i)
             break;
         case SET_FPS: // 24, 15, 20, 24, ...
             bridge_set_fps(bridge_fps() == 24 ? 15 : bridge_fps() == 15 ? 20 : 24);
+            settings_rows();
+            break;
+        case SET_SCALE: // off, 1.5x, 2x, off, ...
+            bridge_set_scale(bridge_scale() == 10 ? 15 : bridge_scale() == 15 ? 20 : 10);
             settings_rows();
             break;
         case SET_ROTATION: // auto, 0, 90, 180, 270, auto, ...

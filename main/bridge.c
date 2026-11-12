@@ -38,6 +38,7 @@ static const char *s_found_by = "";
 static char s_override[64];
 static bool s_4x3;
 static int s_fps;
+static int s_scale = 10;
 static volatile unsigned s_gen;
 static volatile bool s_rescan = true;
 // The bridge's client profile the board asks for, and the overrides it adds for the centre 4:3
@@ -117,6 +118,11 @@ void bridge_size(int *w, int *h)
     // the panel's width (VideoJet holds 24 fps there, upright and stretched sideways)
     *w = s_pic_w ? s_pic_w : big ? (s_4x3 ? 320 : LCD_W) : 0;
     *h = s_pic_h ? s_pic_h : big ? (s_4x3 ? 240 : (LCD_W * 9 / 16) & ~1) : 0;
+    if (!s_pic_w && big && bridge_scale() > 10) {
+        int sw = (*w * 10 / bridge_scale()) & ~7; // a multiple of 8 for the PIE path
+        *h = (*h * sw / *w) & ~1;
+        *w = sw;
+    }
 }
 
 // ---------------------------------------------------------------- HTTP
@@ -538,6 +544,19 @@ static void bridge_task(void *arg)
     }
 }
 
+int bridge_scale(void)
+{
+    return LCD_W * LCD_H > 240 * 240 ? s_scale : 10;
+}
+
+void bridge_set_scale(int tenths)
+{
+    s_scale = tenths == 15 || tenths == 20 ? tenths : 10;
+    char v[4];
+    snprintf(v, sizeof(v), "%d", s_scale);
+    nvs_put("scale", v);
+}
+
 static int fps_default(void)
 {
     return LCD_W * LCD_H > 240 * 240 ? 15 : 24;
@@ -564,6 +583,8 @@ void bridge_start(bool (*online)(void))
     char p[8] = "";
     nvs_str("picture", p, sizeof(p));
     s_4x3 = !strcmp(p, "4x3");
+    nvs_str("scale", p, sizeof(p));
+    s_scale = atoi(p) == 15 || atoi(p) == 20 ? atoi(p) : 10;
     nvs_str("fps", p, sizeof(p));
     int fps = atoi(p); // an earlier "0" (the bridge's own rate) gets the default
     s_fps = fps == 15 || fps == 20 || fps == 24 ? fps : fps_default();

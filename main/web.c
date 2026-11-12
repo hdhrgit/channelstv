@@ -250,6 +250,9 @@ static esp_err_t settings(httpd_req_t *req)
     if (query_str(req, "fps", v, sizeof(v))) {
         bridge_set_fps(atoi(v));
     }
+    if (query_str(req, "scale", v, sizeof(v))) {
+        bridge_set_scale((int)(atof(v) * 10 + 0.5)); // 1, 1.5 or 2
+    }
     int vol = query_int(req, "volume", -1);
     if (vol >= 0) {
         app_set_volume(vol);
@@ -276,6 +279,9 @@ static esp_err_t settings(httpd_req_t *req)
     cJSON_AddBoolToObject(root, "tesync", board_te_sync());
     cJSON_AddNumberToObject(root, "te_period_us", board_te_period_us());
     cJSON_AddNumberToObject(root, "fps", bridge_fps());
+    if (LCD_W * LCD_H > 240 * 240) {
+        cJSON_AddNumberToObject(root, "scale", bridge_scale() / 10.0);
+    }
     cJSON_AddNumberToObject(root, "volume", app_volume());
     cJSON_AddNumberToObject(root, "brightness", ui_brightness());
     if (!ui_dim_seconds()) {
