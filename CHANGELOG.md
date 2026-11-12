@@ -54,8 +54,9 @@
   it, and leaves the setup by itself when it joins. A network lost later is only rejoined.
 - `/api/perf` also reports the largest free block of PSRAM (`psram_largest`).
 - Builds without warnings.
-- Needs: on the AMOLED-1.8, dlna-bridge 0.99.12 or later (for `fit=width` and `fit=height`).
-  The 1.54 asks the bridge as before and works with older bridges (v0.99.10 or later).
+- Needs: on the AMOLED-1.8, dlna-bridge 0.99.12 or later (for `fit=width` and `fit=height`), with
+  0.99.13 or later recommended when several players watch the same channel. The 1.54 asks the
+  bridge as before and works with older bridges (v0.99.10 or later).
 
 ## v0.4.1 (2026-11-12)
 
