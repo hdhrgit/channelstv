@@ -1,5 +1,12 @@
 # Changelog
 
+## Unreleased
+
+- README: the AMOLED-1.8 V1 (SH8601 and FT3168) is untested; it has its own code path but
+  hasn't been tried on that board. The README also describes v0.5.0's picture options, frame
+  rate and upscaling (AMOLED-1.8 only), the `/api/settings` parameters and the Wi-Fi setup
+  hotspot as they are now.
+
 ## v0.5.0 (2026-11-12)
 
 - The Waveshare ESP32-S3-Touch-AMOLED-1.8 (V1: SH8601 and FT3168; V2: CO5300 and CST816), with

@@ -18,16 +18,17 @@ board** says which one it found.
 
 | | [ESP32-S3-Touch-LCD-1.54](https://docs.waveshare.com/ESP32-S3-Touch-LCD-1.54) | [ESP32-S3-Touch-AMOLED-1.8](https://www.waveshare.com/wiki/ESP32-S3-Touch-AMOLED-1.8) |
 |---|---|---|
-| Screen | 240x240 LCD (ST7789, SPI) | 368x448 AMOLED on QSPI: SH8601 (V1) or CO5300 (V2) |
-| Touch | CST816 | FT3168 (V1) or CST816 (V2) |
-| Picture asked of the bridge | the `esp32` profile's (240 wide) | 368x206 (4:3: 320x240) |
+| Screen | 240x240 LCD (ST7789, SPI) | 368x448 AMOLED on QSPI: CO5300 (V2); SH8601 (V1, untested) |
+| Touch | CST816 | CST816 (V2); FT3168 (V1, untested) |
+| Picture asked of the bridge | the `esp32` profile's (240 wide), 24 fps | the screen's size, fitted by the bridge (`fit=width` or `fit=height`); 24, 20 or 15 fps |
 | Rows a page | 4 | 6, and a heading as tall as a row |
 | Keys | PWR, VOL+, VOL- | PWR and BOOT (see [Using it](#using-it)) |
 | Battery | through a latch and the ADC | the AXP2101 power chip |
-| Turning the board | the whole screen turns | the menus stay upright; video turns, sideways across the whole width |
+| Turning the board | the whole screen turns | the menus stay upright; video turns, sideways across the panel's height |
 
 Both have an ESP32-S3 with 16 MB flash and 8 MB PSRAM, an ES8311 speaker codec, a QMI8658 motion
-sensor and a Li-ion battery. On the AMOLED-1.8 each video frame is written just behind the panel's
+sensor and a Li-ion battery. The AMOLED-1.8 V1 (SH8601 and FT3168) has its own code path but
+hasn't been tried on that board yet. On the AMOLED-1.8 each video frame is written just behind the panel's
 refresh, timed by its tearing-effect line (GPIO13), so a frame never shows half old, half new
 (`/api/settings?tesync=0` turns that off until the next start, to compare).
 
@@ -84,9 +85,11 @@ and shows a QR code for it:
 4. Once the board is on the network, the page shows its address and the hotspot closes after
    30 seconds. Join your network again and open that address.
 
-The network is saved. If it can't be reached two minutes after a start (a new router, a new
-password), the hotspot opens again next to it. Meanwhile the board keeps trying the saved
-network every 30 seconds.
+The network is saved. If the board hasn't been on it at all two minutes after a start (a new
+router, a new password, a router still starting after a power cut), the hotspot opens again
+next to it. Meanwhile the board keeps trying the saved network every 30 seconds, and when it
+gets on, the hotspot closes and the setup screen goes by itself. A network lost after the
+board was on it is only joined again, with no hotspot.
 
 To move the board to another network later, open `http://<board-ip>/wifi` (needs Web control:
 full). **Forget this network** there (or `POST /api/wifi/forget`) clears the network and
@@ -123,8 +126,11 @@ The setup page then offers **Back to <network>** for the one just forgotten.
   asks for the start with a `TimeSeekRange.dlna.org: npt=<seconds>-` request header. A
   recording offered without time seek plays from the start to the end.
 - **Settings:** Touch test (tap five dots; the board works out how the touch panel lines up with
-  the screen and keeps it), the picture shape (16:9 or the centre 4:3), Frame rate (24, 20 or
-  15 fps: what the board asks the bridge for; 24 by default on the 1.54, 15 on larger panels), Rotation, Backlight
+  the screen and keeps it), Picture (16:9 or the centre 4:3; on the AMOLED-1.8 also Fill screen,
+  the middle of the picture cropped to the screen's shape), on the AMOLED-1.8 Frame rate (24, 20
+  or 15 fps, default 15: what the board asks the bridge for; the 1.54 always asks for 24) and
+  Upscaling (off, 1.5x or 2x: a smaller picture from the bridge, scaled up, for a smoother frame
+  rate on a busy channel), Rotation, Backlight
   (20 to 100 %), Dim and Off (on battery, after 30 s or 1, 5 or 10 minutes untouched, and after
   1, 5, 10 or 30 minutes, or never; a touch or key brings it back), Find the bridge again, and
   Version & board (the firmware version; tap it for the board's address, the bridge's address,
@@ -168,7 +174,8 @@ which works the same way. While the setup hotspot is open, its page and `/api/wi
 whatever Web control says.
 
 With Web control **full**, the page shows the status, browses the bridge's folders, searches
-titles and plays from them, sets the bridge address, the picture shape, the frame rate, the rotation, the
+titles and plays from them, sets the bridge address, the picture, the frame rate and upscaling
+(AMOLED-1.8), the rotation, the
 backlight, when the screen dims and goes off on battery, and the volume, and shows a picture of
 the screen. The API (all `GET` unless shown):
 
@@ -178,7 +185,7 @@ the screen. The API (all `GET` unless shown):
 | `/api/status` | the board, Wi-Fi, battery, memory, the bridge, playback, Web control and OTA | yes |
 | `/chips`, `/api/chips` | the board and its chips, their IDs, and what the motion sensor, battery and touch read now | yes |
 | `POST /api/ota` | an app image (`channelstv-<version>-ota.bin`) to flash and restart into | its own switch |
-| `/api/settings?bridge=host[:port]&picture=16x9\|4x3&fps=15\|20\|24&volume=0..100&brightness=20..100&dim=30s\|1\|5\|10\|never&off=1\|5\|10\|30\|never` | sets any of them; `bridge=` empty goes back to finding it | |
+| `/api/settings?bridge=host[:port]&picture=16x9\|4x3\|full&fps=15\|20\|24&scale=1\|1.5\|2&volume=0..100&brightness=20..100&dim=30s\|1\|5\|10\|never&off=1\|5\|10\|30\|never` | sets any of them; `bridge=` empty goes back to finding it. `picture=full`, `fps` and `scale` are the AMOLED-1.8's; the 1.54 neither takes nor reports `fps` and `scale` | |
 | `/api/settings?size=WxH&tesync=0\|1` | until the next start: another picture size to ask the bridge for (`0x0`: the board's own), and the AMOLED-1.8's frame timing | |
 | `/api/rescan` | looks for the bridge again | |
 | `/api/browse?id=ID&start=N` | a page of a folder (`0` is the top) | |
@@ -221,11 +228,13 @@ Clear the field to go back to finding the bridge automatically.
 
 ## Bridge setup
 
-The board asks for the client profile `esp32` (16:9, 240x144). It adds `?profile=esp32` to its
+The board asks for the client profile `esp32` (16:9, 240x144 on the 1.54). It adds `?profile=esp32` to its
 requests and sends the User-Agent `channelstv/<version>`. Without this client the bridge sends
 the DVR's original stream, which the board can't decode. For the centre 4:3 of the picture
 (Picture in Settings or on the web page) it adds the bridge's overrides
-`w=240&h=192&fit=crop43` to the stream URLs, which needs dlna-bridge v0.99.10 or later.
+`w=240&h=192&fit=crop43` to the stream URLs, which needs dlna-bridge v0.99.10 or later. The
+AMOLED-1.8 adds its screen's size instead (`w=448&h=368` sideways), with `fit=width` for 16:9
+and `fit=height` for the 4:3 centre and Fill screen, and `fps=`.
 
 Newer bridges have the `esp32` profile built in, so there is nothing to add; a client named
 `esp32` in the bridge's settings still takes its place, for tuning. On older ones, add it as
@@ -242,6 +251,7 @@ The AMOLED-1.8 also needs dlna-bridge 0.99.12 or later, which sizes the picture 
 (`fit=width`, `fit=height`): it looks for those in the bridge's `/api/caps`, or, on a bridge without
 it, goes by the bridge's version. With an older bridge it doesn't play, and the screen and the web page
 say "Update dlna-bridge to 0.99.12 or later" (`/api/status`: `bridge.update` is the version needed).
+dlna-bridge 0.99.13 or later is recommended when several players watch the same channel.
 
 On a bridge without the built-in profile, add the client on its settings page, or with `curl` and
 [`jq`](https://jqlang.org/). `PUT /api/config` takes the whole configuration, so this reads the
