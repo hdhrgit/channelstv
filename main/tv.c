@@ -1001,7 +1001,9 @@ static size_t next_au(uint8_t *buf, bool screen)
         if (!s_demux_running && !xStreamBufferBytesAvailable(s_au_q)) {
             break; // the demuxer is done: nothing more is coming
         }
-        if (screen) {
+        // only into an empty queue: idle ticks behind frames the drawer holds for the clock fill it,
+        // and the decoder then blocks handing over a frame before the pre-roll that starts the clock
+        if (screen && !uxQueueMessagesWaiting(s_full_q)) {
             frame_t idle = {.buf = FR_IDLE};
             xQueueSend(s_full_q, &idle, 0);
         }
