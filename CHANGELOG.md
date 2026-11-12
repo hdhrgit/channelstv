@@ -1,15 +1,23 @@
 # Changelog
 
-## Unreleased
+## v0.5.0 (2026-11-12)
 
 - The Waveshare ESP32-S3-Touch-AMOLED-1.8 (V1: SH8601 and FT3168; V2: CO5300 and CST816), with
   the same image as the 1.54: the board is told apart at start-up. Its panel, touch, AXP2101
   power chip (battery, charging, power-off), IO expander and keys are set up for it.
 - On the AMOLED-1.8 the menus are scaled to its screen, six rows a page under a heading as tall as
-  a row; the board asks the bridge for a 368x206 picture (320x240 for the centre 4:3).
-- On the AMOLED-1.8 video turns sideways with the board, stretched across the panel's whole height;
-  the menus stay upright. Video frames are written behind the panel's refresh, timed by its
+  a row. The board asks the bridge for its screen's size and lets the bridge fit the picture
+  (`fit=width`, or `fit=height` for a picture cropped to the screen's shape), so the picture is
+  drawn one pixel per pixel.
+- On the AMOLED-1.8 video turns sideways with the board, across the panel's whole height; the
+  menus stay upright. Video frames are written behind the panel's refresh, timed by its
   tearing-effect line; `/api/settings?tesync=0|1` switches that until the next start.
+- AMOLED-1.8 Picture setting: 16:9, 4:3 centre, or Fill screen (the middle of the picture,
+  cropped to the screen's shape: the whole screen sideways). Also on the web page and in
+  `/api/settings` (`picture=16x9|4x3|full`).
+- AMOLED-1.8 Upscaling setting: off, 1.5x or 2x. The board asks the bridge for a smaller picture
+  and scales it up, for a smoother frame rate on a busy channel. Also on the web page and in
+  `/api/settings` (`scale=1|1.5|2`).
 - AMOLED-1.8 keys: PWR stops playback or goes back, held 3 s powers off, and switches the board on;
   BOOT also goes back, and held steps the volume down and round, stopping at 50 % the second time.
 - H.264 decoding with [VideoJet](https://github.com/hdhrgit/VideoJet) (Apache-2.0), fetched by
@@ -27,10 +35,27 @@
 - Wi-Fi joins the strongest access point of its network, moves to a much stronger one when weak
   and idle, and the signal shown is smoothed.
 - A recording whose stream ends before its last minute keeps its place to resume from.
-- Settings: Frame rate (24, 20 or 15 fps; by default 24 on the 1.54, 15 on larger panels), also
-  on the web page and in `/api/settings` (`fps=`). The board asks the bridge for that rate
-  (`fps=` on every stream request). 15 fps is plenty for news and needs about a third less
-  decoding.
+- AMOLED-1.8 Frame rate setting: 24, 20 or 15 fps (default 15), also on the web page and in
+  `/api/settings` (`fps=`). The board asks the bridge for that rate (`fps=` on every stream
+  request). The 1.54 always asks for 24 fps and has no Frame rate or Upscaling setting.
+- Faster video on both boards: the decoder hands its frame over while it decodes the next, the
+  colour conversion and the sideways turn use the chip's vector instructions, and the drawing
+  runs from internal memory.
+- A board that can't keep up with a stream slows its picture down instead of dropping it: a late
+  frame still shows when no newer one is waiting, and half a second behind it skips to the next
+  keyframe. The web page keeps answering while it does.
+- A slow stream no longer freezes the picture at its first frame.
+- The AMOLED-1.8 checks that the bridge can fit its picture (the fits in the bridge's
+  `/api/caps`, or its version where it has none). With an older bridge it plays nothing and
+  says "Update dlna-bridge to 0.99.12 or later", on the screen, on the web page and in
+  `/api/status` (`bridge.update`).
+- The Wi-Fi setup hotspot (with its QR code) opens two minutes after start only if the board
+  hasn't been on its network at all since. The board keeps its saved network and keeps trying
+  it, and leaves the setup by itself when it joins. A network lost later is only rejoined.
+- `/api/perf` also reports the largest free block of PSRAM (`psram_largest`).
+- Builds without warnings.
+- Needs: on the AMOLED-1.8, dlna-bridge 0.99.12 or later (for `fit=width` and `fit=height`).
+  The 1.54 asks the bridge as before and works with older bridges (v0.99.10 or later).
 
 ## v0.4.1 (2026-11-12)
 
