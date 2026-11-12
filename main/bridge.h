@@ -89,8 +89,9 @@ bool bridge_profile_problem(char *out, size_t len);
 bool bridge_recheck_profiles(void);
 // The message the screen and the web page show for a wrong profile
 #define BRIDGE_PROFILE_HELP "Bridge needs the esp32 profile, see README"
-// The oldest bridge that fits the picture as the board asks (fit=width / fit=height): an older one
-// counts as a profile problem, with this message instead
+// The oldest bridge that fits the picture as the board asks (fit=width / fit=height): one without
+// those fits in its /api/caps, or older by its version where it has no /api/caps (an unknown
+// version doesn't count), is a profile problem, with this message instead
 #define BRIDGE_MIN_VERSION "0.99.12"
 #define BRIDGE_UPDATE_HELP "Update dlna-bridge to " BRIDGE_MIN_VERSION " or later"
 // BRIDGE_UPDATE_HELP when the profile problem is the bridge's version, else BRIDGE_PROFILE_HELP

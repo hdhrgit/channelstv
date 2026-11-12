@@ -332,8 +332,8 @@ static void profile_problem(const cJSON *found, const char *name, char *out, siz
     }
 }
 
-// True if version ("0.99.11", "v0.99.11+2.gf19dd58") is older than BRIDGE_MIN_VERSION; false if it
-// can't be read as one
+// True if version ("0.99.11", "v0.99.11+2.gf19dd58") is older than BRIDGE_MIN_VERSION, by its first
+// three numbers only (0.99.12+3.gabc counts as 0.99.12); false if it can't be read as one
 static bool version_too_old(const char *version)
 {
     int a[3], m[3];
@@ -374,12 +374,35 @@ static void check_profiles(const char *base, char *buf)
     } else {
         ESP_LOGW(TAG, "can't read the bridge's client profiles");
     }
-    // one that can't fit the picture would play it squashed or cut wrong: none at all instead
-    bool old = !problem[0] && cJSON_IsString(ver) && version_too_old(ver->valuestring);
-    if (old) {
-        snprintf(problem, sizeof(problem), "the bridge is %.40s", ver->valuestring);
+    char version[24] = "";
+    if (cJSON_IsString(ver)) {
+        strlcpy(version, ver->valuestring, sizeof(version));
     }
     cJSON_Delete(root);
+    // one that can't fit the picture would play it squashed or cut wrong: none at all instead.
+    // Its /api/caps lists the fits it knows; a bridge without that goes by its version.
+    bool old = false;
+    if (!problem[0]) {
+        snprintf(url, sizeof(url), "%s/api/caps", base);
+        cJSON *caps = http_get(url, buf, DESC_MAX, 4000) > 0 ? cJSON_Parse(buf) : NULL;
+        const cJSON *fits = cJSON_GetObjectItem(caps, "fits");
+        if (cJSON_IsArray(fits)) {
+            bool w = false, h = false;
+            const cJSON *f;
+            cJSON_ArrayForEach(f, fits)
+            {
+                w = w || (cJSON_IsString(f) && !strcmp(f->valuestring, "width"));
+                h = h || (cJSON_IsString(f) && !strcmp(f->valuestring, "height"));
+            }
+            old = !w || !h;
+        } else {
+            old = version_too_old(version);
+        }
+        cJSON_Delete(caps);
+    }
+    if (old) {
+        snprintf(problem, sizeof(problem), "the bridge is %.40s", version[0] ? version : "older");
+    }
     xSemaphoreTake(s_lock, portMAX_DELAY);
     strlcpy(s_problem, problem, sizeof(s_problem));
     s_too_old = old;

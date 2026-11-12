@@ -239,7 +239,8 @@ reason, and so do the web page and `/api/status` (`bridge.profile_problem`). A s
 won't decode ends with the same message.
 
 The board also needs dlna-bridge 0.99.12 or later, which sizes the picture the way the board asks
-(`fit=width`, `fit=height`). With an older bridge it doesn't play, and the screen and the web page
+(`fit=width`, `fit=height`): it looks for those in the bridge's `/api/caps`, or, on a bridge without
+it, goes by the bridge's version. With an older bridge it doesn't play, and the screen and the web page
 say "Update dlna-bridge to 0.99.12 or later" (`/api/status`: `bridge.update` is the version needed).
 
 On a bridge without the built-in profile, add the client on its settings page, or with `curl` and
