@@ -378,7 +378,7 @@ static esp_err_t play(httpd_req_t *req)
         free(url);
         cJSON *root = cJSON_CreateObject();
         cJSON_AddBoolToObject(root, "ok", false);
-        cJSON_AddStringToObject(root, "error", BRIDGE_PROFILE_HELP);
+        cJSON_AddStringToObject(root, "error", bridge_problem_help());
         cJSON_AddStringToObject(root, "profile_problem", why);
         return send_json(req, root);
     }

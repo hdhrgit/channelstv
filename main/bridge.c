@@ -48,6 +48,7 @@ static volatile bool s_rescan = true;
 // What is wrong with that profile ("" when it's fine or couldn't be read), from its /api/state
 static char s_problem[96];
 static char s_bversion[24]; // the bridge's own version, from its /api/state
+static bool s_too_old;      // s_problem is that version: older than BRIDGE_MIN_VERSION
 static volatile bool s_recheck;
 static TaskHandle_t s_task;
 
@@ -331,6 +332,26 @@ static void profile_problem(const cJSON *found, const char *name, char *out, siz
     }
 }
 
+// True if version ("0.99.11", "v0.99.11+2.gf19dd58") is older than BRIDGE_MIN_VERSION; false if it
+// can't be read as one
+static bool version_too_old(const char *version)
+{
+    int a[3], m[3];
+    if (*version == 'v') {
+        version++;
+    }
+    if (sscanf(version, "%d.%d.%d", &a[0], &a[1], &a[2]) != 3 ||
+        sscanf(BRIDGE_MIN_VERSION, "%d.%d.%d", &m[0], &m[1], &m[2]) != 3) {
+        return false;
+    }
+    for (int i = 0; i < 3; i++) {
+        if (a[i] != m[i]) {
+            return a[i] < m[i];
+        }
+    }
+    return false;
+}
+
 // Reads the client profile from the bridge's /api/state (the board never writes to it): one in
 // its config if there is one, which the bridge uses first, else the one built into the bridge.
 // If the state can't be read, nothing is held against the profile.
@@ -353,9 +374,15 @@ static void check_profiles(const char *base, char *buf)
     } else {
         ESP_LOGW(TAG, "can't read the bridge's client profiles");
     }
+    // one that can't fit the picture would play it squashed or cut wrong: none at all instead
+    bool old = !problem[0] && cJSON_IsString(ver) && version_too_old(ver->valuestring);
+    if (old) {
+        snprintf(problem, sizeof(problem), "the bridge is %.40s", ver->valuestring);
+    }
     cJSON_Delete(root);
     xSemaphoreTake(s_lock, portMAX_DELAY);
     strlcpy(s_problem, problem, sizeof(s_problem));
+    s_too_old = old;
     xSemaphoreGive(s_lock);
     if (problem[0]) {
         ESP_LOGW(TAG, "bridge profile: %s", problem);
@@ -377,6 +404,11 @@ bool bridge_profile_problem(char *out, size_t len)
     return out[0];
 }
 
+const char *bridge_problem_help(void)
+{
+    return s_too_old ? BRIDGE_UPDATE_HELP : BRIDGE_PROFILE_HELP;
+}
+
 bool bridge_recheck_profiles(void)
 {
     char base[96], *buf = heap_caps_malloc(DESC_MAX, MALLOC_CAP_SPIRAM);
@@ -396,6 +428,7 @@ static void lose(bridge_state_t why)
     s_base[0] = s_control[0] = s_name[0] = '\0';
     s_found_by = "";
     s_problem[0] = '\0';
+    s_too_old = false;
     s_bversion[0] = '\0';
     s_state = why;
     if (had) {
@@ -937,6 +970,7 @@ void bridge_status_json(char *out, size_t len)
     xSemaphoreTake(s_lock, portMAX_DELAY);
     strlcpy(problem, s_problem, sizeof(problem));
     strlcpy(ver, s_bversion, sizeof(ver));
+    bool old = s_too_old;
     xSemaphoreGive(s_lock);
     for (char *c = ver; *c; c++) {
         if (*c == '"' || *c == '\\' || (unsigned char)*c < 0x20) {
@@ -950,6 +984,7 @@ void bridge_status_json(char *out, size_t len)
     }
     snprintf(out, len,
              "{\"state\":\"%s\",\"base\":\"%s\",\"name\":\"%s\",\"found_by\":\"%s\",\"override\":\"%s\","
-             "\"picture\":\"%s\",\"udn\":\"%s\",\"version\":\"%s\",\"profile_problem\":\"%s\"}",
-             bridge_state_text(), base, s_name, s_found_by, s_override, bridge_picture(), s_udn, ver, problem);
+             "\"picture\":\"%s\",\"udn\":\"%s\",\"version\":\"%s\",\"profile_problem\":\"%s\",\"update\":%s}",
+             bridge_state_text(), base, s_name, s_found_by, s_override, bridge_picture(), s_udn, ver, problem,
+             old ? "\"" BRIDGE_MIN_VERSION "\"" : "null");
 }

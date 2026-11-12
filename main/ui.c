@@ -945,7 +945,7 @@ static void play_task(void *arg)
                  tv_busy() ? "it runs all the conversions it allows" : tv_error());
         bool undecodable = !strcmp(tv_error(), TV_UNDECODABLE) || strstr(tv_error(), "doesn't fit");
         if (undecodable && bridge_recheck_profiles() && bridge_profile_problem(why, sizeof(why))) {
-            snprintf(text, sizeof(text), "%s\n(%s)", BRIDGE_PROFILE_HELP, why);
+            snprintf(text, sizeof(text), "%s\n(%s)", bridge_problem_help(), why);
         }
         if (lvgl_port_lock(500)) {
             toast(text, 4000);
@@ -967,7 +967,7 @@ static bool profile_toast(void)
     if (!bridge_profile_problem(why, sizeof(why))) {
         return false;
     }
-    snprintf(text, sizeof(text), "%s\n(%s)", BRIDGE_PROFILE_HELP, why);
+    snprintf(text, sizeof(text), "%s\n(%s)", bridge_problem_help(), why);
     toast(text, 6000);
     return true;
 }

@@ -238,6 +238,10 @@ one, and wants it to transcode to H.264 `baseline`, one slice a frame (`single_s
 reason, and so do the web page and `/api/status` (`bridge.profile_problem`). A stream that still
 won't decode ends with the same message.
 
+The board also needs dlna-bridge 0.99.12 or later, which sizes the picture the way the board asks
+(`fit=width`, `fit=height`). With an older bridge it doesn't play, and the screen and the web page
+say "Update dlna-bridge to 0.99.12 or later" (`/api/status`: `bridge.update` is the version needed).
+
 On a bridge without the built-in profile, add the client on its settings page, or with `curl` and
 [`jq`](https://jqlang.org/). `PUT /api/config` takes the whole configuration, so this reads the
 current one from `/api/state`, puts the client in (replacing any with the same name) and
