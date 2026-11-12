@@ -59,12 +59,14 @@
     <option value="4x3">4:3 centre (240x192)</option>
     <option value="full" id="picfull" hidden>fill the screen (the middle, cropped)</option>
   </select>
+  <div id="fpsrow" hidden>
   <label for="fps">Frame rate</label>
   <select id="fps">
     <option value="24">24 fps</option>
     <option value="20">20 fps</option>
     <option value="15">15 fps (enough for news)</option>
   </select>
+  </div>
   <div id="scalerow" hidden>
     <label for="scale">Upscaling</label>
     <select id="scale">
@@ -151,7 +153,7 @@ async function refresh() {
       $('volume').value = s.volume;
       $('volv').textContent = s.volume + '%';
       fetch('/api/rotation').then(r => r.json()).then(r => $('rotation').value = String(r.setting)).catch(() => {});
-      fetch('/api/settings').then(r => r.json()).then(r => { $('fps').value = String(r.fps); if (r.scale !== undefined) { $('scalerow').hidden = false; $('picfull').hidden = false; $('scale').value = String(r.scale); } $('brightness').value = String(r.brightness); $('dim').value = String(r.dim); $('off').value = String(r.off); }).catch(() => {});
+      fetch('/api/settings').then(r => r.json()).then(r => { if (r.fps !== undefined) { $('fpsrow').hidden = false; $('fps').value = String(r.fps); } if (r.scale !== undefined) { $('scalerow').hidden = false; $('picfull').hidden = false; $('scale').value = String(r.scale); } $('brightness').value = String(r.brightness); $('dim').value = String(r.dim); $('off').value = String(r.off); }).catch(() => {});
     }
   } catch (e) {
     $('status').innerHTML = '<dt>Status</dt><dd class="bad">the board doesn\'t answer</dd>';
@@ -160,7 +162,7 @@ async function refresh() {
 
 $('volume').oninput = () => $('volv').textContent = $('volume').value + '%';
 $('save').onclick = async () => {
-  const q = new URLSearchParams({bridge: $('bridge').value.trim(), picture: $('picture').value, fps: $('fps').value, ...($('scalerow').hidden ? {} : {scale: $('scale').value}), volume: $('volume').value, brightness: $('brightness').value, dim: $('dim').value, off: $('off').value});
+  const q = new URLSearchParams({bridge: $('bridge').value.trim(), picture: $('picture').value, ...($('fpsrow').hidden ? {} : {fps: $('fps').value}), ...($('scalerow').hidden ? {} : {scale: $('scale').value}), volume: $('volume').value, brightness: $('brightness').value, dim: $('dim').value, off: $('off').value});
   await fetch('/api/settings?' + q);
   await fetch('/api/rotation?set=' + $('rotation').value);
   setTimeout(refresh, 500);

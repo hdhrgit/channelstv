@@ -282,17 +282,19 @@ static bool settings_under_note(void)
 enum { SET_TOUCH, SET_PICTURE, SET_FPS, SET_SCALE, SET_ROTATION, SET_BRIGHT, SET_DIM, SET_OFF, SET_OTA, SET_WEB, SET_FIND, SET_VERSION,
        SET_N };
 
-// The Settings rows this board shows, in order: Upscaling only on the larger panel
+// The Settings rows this board shows, in order: Frame rate and Upscaling only on the larger panel
+// (the 1.54 always plays 24 fps, 1:1)
 static int set_rows(int *ids)
 {
     int n = 0;
     for (int k = 0; k < SET_N; k++) {
-        if (k != SET_SCALE || LCD_W * LCD_H > 240 * 240) {
+        if ((k != SET_FPS && k != SET_SCALE) || LCD_W * LCD_H > 240 * 240) {
             ids[n++] = k;
         }
     }
     return n;
 }
+
 
 // The first item on a page of a folder of total items: the last page shows the last full
 // page's worth instead of a few rows (it overlaps the page before).

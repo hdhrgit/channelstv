@@ -631,6 +631,9 @@ int bridge_fps(void)
 
 void bridge_set_fps(int fps)
 {
+    if (LCD_W * LCD_H <= 240 * 240) {
+        return; // the 1.54 always asks for 24
+    }
     s_fps = fps == 15 || fps == 20 || fps == 24 ? fps : fps_default();
     char v[4];
     snprintf(v, sizeof(v), "%d", s_fps);
@@ -650,7 +653,7 @@ void bridge_start(bool (*online)(void))
     s_scale = atoi(p) == 15 || atoi(p) == 20 ? atoi(p) : 10;
     nvs_str("fps", p, sizeof(p));
     int fps = atoi(p); // an earlier "0" (the bridge's own rate) gets the default
-    s_fps = fps == 15 || fps == 20 || fps == 24 ? fps : fps_default();
+    s_fps = LCD_W * LCD_H > 240 * 240 && (fps == 15 || fps == 20 || fps == 24) ? fps : fps_default();
     // internal stack: it writes NVS (flash)
     xTaskCreate(bridge_task, "bridge", 6144, NULL, 3, &s_task);
 }

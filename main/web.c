@@ -278,8 +278,8 @@ static esp_err_t settings(httpd_req_t *req)
     cJSON_AddStringToObject(root, "size", size);
     cJSON_AddBoolToObject(root, "tesync", board_te_sync());
     cJSON_AddNumberToObject(root, "te_period_us", board_te_period_us());
-    cJSON_AddNumberToObject(root, "fps", bridge_fps());
-    if (LCD_W * LCD_H > 240 * 240) {
+    if (LCD_W * LCD_H > 240 * 240) { // the 1.54 has neither: always 24 fps, 1:1
+        cJSON_AddNumberToObject(root, "fps", bridge_fps());
         cJSON_AddNumberToObject(root, "scale", bridge_scale() / 10.0);
     }
     cJSON_AddNumberToObject(root, "volume", app_volume());
