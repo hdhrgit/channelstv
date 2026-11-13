@@ -186,6 +186,7 @@ static esp_err_t status(httpd_req_t *req)
 {
     cJSON *root = cJSON_CreateObject();
     cJSON_AddStringToObject(root, "fw", CHANNELSTV_VERSION);
+    cJSON_AddStringToObject(root, "name", bridge_board_name());
     cJSON_AddStringToObject(root, "idf", esp_app_get_description()->idf_ver);
     cJSON_AddNumberToObject(root, "uptime_s", esp_timer_get_time() / 1000000);
     cJSON_AddStringToObject(root, "reset_reason", app_reset_reason());
@@ -235,6 +236,9 @@ static esp_err_t settings(httpd_req_t *req)
     if (query_str(req, "bridge", v, sizeof(v))) {
         bridge_set_override(v);
     }
+    if (query_str(req, "name", v, sizeof(v))) {
+        bridge_set_board_name(v);
+    }
     if (query_str(req, "picture", v, sizeof(v))) {
         bridge_set_picture(v);
     }
@@ -270,6 +274,7 @@ static esp_err_t settings(httpd_req_t *req)
     }
     cJSON *root = cJSON_CreateObject();
     cJSON_AddStringToObject(root, "bridge", bridge_override());
+    cJSON_AddStringToObject(root, "name", bridge_board_name());
     cJSON_AddStringToObject(root, "picture", bridge_picture());
     int pw, ph;
     bridge_size(&pw, &ph);

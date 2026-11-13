@@ -2083,7 +2083,8 @@ static void rebuild(void)
         head_set(text);
         return;
     }
-    head_set(s_depth == 1 ? (bridge_name()[0] ? bridge_name() : "channelstv") : lv->title);
+    const char *top = bridge_board_name()[0] ? bridge_board_name() : bridge_name()[0] ? bridge_name() : "channelstv";
+    head_set(s_depth == 1 ? top : lv->title);
     if (bridge_state() != BRIDGE_FOUND && !at_local()) {
         rows_hidden();
         bridge_note();
@@ -2291,6 +2292,11 @@ static void refresh(lv_timer_t *timer)
     if (s_bridge_state != bridge_state()) {
         s_bridge_state = bridge_state();
         s_shown_gen = ~s_result_gen; // the note on the screen changes
+    }
+    static char seen_name[BOARD_NAME_MAX + 1];
+    if (strcmp(seen_name, bridge_board_name())) {
+        strlcpy(seen_name, bridge_board_name(), sizeof(seen_name));
+        s_shown_gen = ~s_result_gen; // the top screen's heading changes
     }
     if (s_shown_gen != s_result_gen) {
         s_shown_gen = s_result_gen;

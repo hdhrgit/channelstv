@@ -30,6 +30,11 @@ const char *bridge_state_text(void);
 // "http://192.0.2.10:8200", empty until found
 void bridge_base(char *out, size_t len);
 const char *bridge_name(void);    // its friendlyName
+// The board's own name, shown on the top screen's heading in place of the bridge's ("" for the
+// bridge's): saved in NVS, at most BOARD_NAME_MAX bytes, spaces at either end trimmed
+#define BOARD_NAME_MAX 32
+const char *bridge_board_name(void);
+void bridge_set_board_name(const char *name);
 const char *bridge_found_by(void); // "discovery", "saved", "manual" or ""
 // Changes whenever the bridge is found again or lost.
 unsigned bridge_gen(void);

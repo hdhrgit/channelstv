@@ -33,6 +33,7 @@ static volatile bridge_state_t s_state = BRIDGE_WAITING;
 static char s_base[96];       // http://host:port
 static char s_control[160];   // the ContentDirectory control URL
 static char s_name[64];
+static char s_board_name[BOARD_NAME_MAX + 1];
 static char s_udn[64];
 static const char *s_found_by = "";
 static char s_override[64];
@@ -76,6 +77,41 @@ static void nvs_put(const char *key, const char *value)
         nvs_commit(h);
         nvs_close(h);
     }
+}
+
+const char *bridge_board_name(void)
+{
+    return s_board_name;
+}
+
+void bridge_set_board_name(const char *name)
+{
+    char v[BOARD_NAME_MAX + 1];
+    size_t n = 0;
+    while (*name == ' ') {
+        name++;
+    }
+    for (; *name && n < BOARD_NAME_MAX; name++) {
+        if ((unsigned char)*name >= 0x20 && *name != 0x7f) {
+            v[n++] = *name; // control characters left out
+        }
+    }
+    // not past the end of a whole UTF-8 character, nor ending in spaces
+    size_t cut = n;
+    while (cut && ((unsigned char)v[cut - 1] & 0xc0) == 0x80) {
+        cut--;
+    }
+    if (cut && (unsigned char)v[cut - 1] >= 0xc0) {
+        unsigned char lead = v[cut - 1];
+        size_t need = lead >= 0xf0 ? 4 : lead >= 0xe0 ? 3 : 2;
+        n = n - (cut - 1) >= need ? cut - 1 + need : cut - 1;
+    }
+    while (n && v[n - 1] == ' ') {
+        n--;
+    }
+    v[n] = '\0';
+    strlcpy(s_board_name, v, sizeof(s_board_name));
+    nvs_put("name", s_board_name);
 }
 
 const char *bridge_override(void)
@@ -652,6 +688,7 @@ void bridge_start(bool (*online)(void))
     s_online = online;
     s_lock = xSemaphoreCreateMutex();
     nvs_str("override", s_override, sizeof(s_override));
+    nvs_str("name", s_board_name, sizeof(s_board_name));
     char p[8] = "";
     nvs_str("picture", p, sizeof(p));
     s_4x3 = !strcmp(p, "4x3");

@@ -3,8 +3,9 @@
 // nothing runs. While the setup hotspot is open its page and /api/wifi* always answer.
 //   GET  /                      status and settings
 //   GET  /api/status            Wi-Fi, battery, memory, the bridge and playback
-//   GET  /api/settings[?bridge=host[:port]][&picture=16x9|4x3][&volume=0..100]
-//                               bridge= with nothing after it goes back to discovery
+//   GET  /api/settings[?bridge=host[:port]][&name=N][&picture=16x9|4x3][&volume=0..100]
+//                               bridge= with nothing after it goes back to discovery; name= is
+//                               the board's own name for the top screen (empty: the bridge's)
 //   GET  /api/rescan            looks for the bridge again
 //   GET  /api/browse?id=ID[&start=N]  a page of a ContentDirectory folder ("0" is the top)
 //   GET  /api/search?q=WORDS[&start=N]  recordings, movies and shows whose titles hold every
