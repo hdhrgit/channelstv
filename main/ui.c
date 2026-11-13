@@ -2162,11 +2162,11 @@ static int text_w(lv_obj_t *l)
 }
 
 // The heading's right end, from the right: Wi-Fi, the battery, the page number, each as wide as
-// what it says now; the title takes the rest. It starts after the back arrow, or without one in
-// line with the rows' icons.
+// what it says now; the title takes the rest. It starts after the back arrow, or without one
+// at the left edge, where the arrow would be.
 static void head_fit(void)
 {
-    int left = lv_obj_has_flag(s_head_back, LV_OBJ_FLAG_HIDDEN) ? PX(14) : PX(34);
+    int left = lv_obj_has_flag(s_head_back, LV_OBJ_FLAG_HIDDEN) ? PX(8) : PX(34);
     if (lv_obj_get_style_x(s_head, 0) != left) {
         lv_obj_set_x(s_head, left);
     }
