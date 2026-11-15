@@ -49,9 +49,17 @@ int app_volume(void)
     return s_volume;
 }
 
+// Volume goes in steps of 5 (the keys' step): a value in between, as the web page's slider or an older
+// build could leave, goes to the nearest step, so the keys land on 0 and 100 again
+static int volume_step(int v)
+{
+    v = v < 0 ? 0 : v > 100 ? 100 : v;
+    return (v + 2) / 5 * 5;
+}
+
 void app_set_volume(int v)
 {
-    s_volume = v < 0 ? 0 : v > 100 ? 100 : v;
+    s_volume = volume_step(v);
     if (board_speaker()) {
         esp_codec_dev_set_out_vol(board_speaker(), s_volume);
     }
@@ -72,7 +80,7 @@ static void volume_load(void)
     if (nvs_open("channelstv", NVS_READONLY, &h) == ESP_OK) {
         int32_t v;
         if (nvs_get_i32(h, "volume", &v) == ESP_OK) {
-            s_volume = v;
+            s_volume = volume_step(v);
         }
         if (nvs_get_i32(h, "web_mode", &v) == ESP_OK && v >= WEB_FULL && v <= WEB_OFF) {
             s_web_mode = v;
