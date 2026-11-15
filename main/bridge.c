@@ -38,7 +38,7 @@ static const char *s_found_by = "";
 static char s_override[64];
 static bool s_4x3;
 static bool s_full; // the picture fills the larger panel: its middle, cropped to the panel's shape
-static int s_fps;
+static int s_fps; // set by the user, else 0: fps_default()
 static int s_kbps;              // Bitrate: 0 (Auto) or kbps
 static int s_kbps_max = 1500;   // the most the bridge takes (its /api/caps), where known
 static int s_scale = 10;
@@ -625,14 +625,16 @@ void bridge_set_scale(int tenths)
     nvs_put("scale", v);
 }
 
+// Without a frame rate set: 24, but 20 for Fill screen on the larger panel (its 448x368 holds 24 only at
+// the lowest bitrates)
 static int fps_default(void)
 {
-    return LCD_W * LCD_H > 240 * 240 ? 15 : 24;
+    return LCD_W * LCD_H > 240 * 240 && s_full ? 20 : 24;
 }
 
 int bridge_fps(void)
 {
-    return s_fps;
+    return s_fps ? s_fps : fps_default();
 }
 
 void bridge_set_fps(int fps)
@@ -640,7 +642,7 @@ void bridge_set_fps(int fps)
     if (LCD_W * LCD_H <= 240 * 240) {
         return; // the 1.54 always asks for 24
     }
-    s_fps = fps == 15 || fps == 20 || fps == 24 ? fps : fps_default();
+    s_fps = fps == 15 || fps == 20 || fps == 24 ? fps : 0;
     char v[4];
     snprintf(v, sizeof(v), "%d", s_fps);
     nvs_put("fps", v);
@@ -676,8 +678,8 @@ void bridge_start(bool (*online)(void))
     nvs_str("scale", p, sizeof(p));
     s_scale = atoi(p) == 15 || atoi(p) == 20 ? atoi(p) : 10;
     nvs_str("fps", p, sizeof(p));
-    int fps = atoi(p); // an earlier "0" (the bridge's own rate) gets the default
-    s_fps = LCD_W * LCD_H > 240 * 240 && (fps == 15 || fps == 20 || fps == 24) ? fps : fps_default();
+    int fps = atoi(p); // none set, or an earlier "0" (the bridge's own rate): the default, by the picture
+    s_fps = LCD_W * LCD_H > 240 * 240 && (fps == 15 || fps == 20 || fps == 24) ? fps : 0;
     nvs_str("kbps", p, sizeof(p));
     s_kbps = kbps_ok(atoi(p)) ? atoi(p) : 0;
     // internal stack: it writes NVS (flash)
@@ -745,7 +747,7 @@ static int video_kbps(int w, int h, bool width_fit)
     } else if (width_fit && w * 9 / 16 < h) {
         h = w * 9 / 16; // the whole 16:9 picture across the width
     }
-    int kpps = w * h * s_fps / 1000, kbps = kpps * 55 / 100;
+    int kpps = w * h * bridge_fps() / 1000, kbps = kpps * 55 / 100;
     int most = kpps <= 2500 ? 700 : 700 - (kpps - 2500) * 275 / 1000;
     kbps = kbps > most ? most : kbps;
     kbps = kbps < 250 ? 250 : kbps;
@@ -774,7 +776,7 @@ static void with_profile(const char *url, char *out, size_t len)
     }
     if (!strstr(out, "fps=")) {
         size_t n = strlen(out);
-        snprintf(out + n, len - n, "%cfps=%d", strchr(out, '?') ? '&' : '?', s_fps);
+        snprintf(out + n, len - n, "%cfps=%d", strchr(out, '?') ? '&' : '?', bridge_fps());
     }
     if (!strstr(out, "vb=")) {
         size_t n = strlen(out);

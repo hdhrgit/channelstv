@@ -132,7 +132,7 @@ The setup page then offers **Back to <network>** for the one just forgotten.
 - **Settings:** Touch test (tap five dots; the board works out how the touch panel lines up with
   the screen and keeps it), Picture (16:9 or the centre 4:3; on the AMOLED-1.8 also Fill screen,
   the middle of the picture cropped to the screen's shape), on the AMOLED-1.8 Frame rate (24, 20
-  or 15 fps, default 15: what the board asks the bridge for; the 1.54 always asks for 24) and
+  or 15 fps, default 24, 20 on Fill screen: what the board asks the bridge for; the 1.54 always asks for 24) and
   Upscaling (off, 1.5x or 2x: a smaller picture from the bridge, scaled up, for a smoother frame
   rate on a busy channel), Bitrate (Auto, or 250, 400, 550, 700, 1000 or 1500 kbps; Auto asks for 250 to 700
   by the picture's size and frame rate; over 700 kbps the board may drop frames or stutter, and the row shows ⚠),
