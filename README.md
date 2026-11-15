@@ -239,6 +239,9 @@ the DVR's original stream, which the board can't decode. For the centre 4:3 of t
 `w=240&h=192&fit=crop43` to the stream URLs, which needs dlna-bridge v0.99.10 or later. The
 AMOLED-1.8 adds its screen's size instead (`w=448&h=368` sideways), with `fit=width` for 16:9
 and `fit=height` for the 4:3 centre and Fill screen, and `fps=`.
+Both add `vb=`, a video bitrate for the picture they ask for: 0.55 bits a pixel, from 250 to 700 kbps, less
+the more pixels a second the board has to decode (460 kbps for the 1.54's 240x144, 250 for the AMOLED-1.8's
+448x368 at 24 fps). It takes the place of the profile's `video_kbps`.
 
 Newer bridges have the `esp32` profile built in, so there is nothing to add; a client named
 `esp32` in the bridge's settings still takes its place, for tuning. On older ones, add it as

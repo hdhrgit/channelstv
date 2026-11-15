@@ -707,8 +707,27 @@ unsigned bridge_gen(void)
 
 // ---------------------------------------------------------------- ContentDirectory
 
+// The video bitrate to ask for, in kbps: the esp32 profile's 250 suits 240x144 (0.3 bits a pixel at 24 fps),
+// and the bridge's fast encoder looks better with more. 0.55 bits a pixel, but decoding takes longer with more
+// pixels a second and with more bits: at most 700 up to 2.5 million pixels a second (448x368 at 15 fps), falling
+// to 250 at 3.9 million (448x368 at 24 fps decodes in time only at about 250).
+static int video_kbps(int w, int h, bool width_fit)
+{
+    if (!w || !h) {
+        w = 240; // the 1.54's picture: the profile's own size, or the centre 4:3
+        h = s_4x3 ? 192 : 144;
+    } else if (width_fit && w * 9 / 16 < h) {
+        h = w * 9 / 16; // the whole 16:9 picture across the width
+    }
+    int kpps = w * h * s_fps / 1000, kbps = kpps * 55 / 100;
+    int most = kpps <= 2500 ? 700 : 700 - (kpps - 2500) * 450 / 1400;
+    kbps = kbps > most ? most : kbps;
+    kbps = kbps < 250 ? 250 : kbps;
+    return (kbps + 5) / 10 * 10;
+}
+
 // The stream URL with ?profile=esp32 unless it names a profile already, for the centre 4:3 the
-// bridge's overrides for that picture, and the frame rate.
+// bridge's overrides for that picture, the frame rate and the video bitrate.
 static void with_profile(const char *url, char *out, size_t len)
 {
     strlcpy(out, url, len);
@@ -730,6 +749,11 @@ static void with_profile(const char *url, char *out, size_t len)
     if (!strstr(out, "fps=")) {
         size_t n = strlen(out);
         snprintf(out + n, len - n, "%cfps=%d", strchr(out, '?') ? '&' : '?', s_fps);
+    }
+    if (!strstr(out, "vb=")) {
+        size_t n = strlen(out);
+        snprintf(out + n, len - n, "%cvb=%d", strchr(out, '?') ? '&' : '?',
+                 video_kbps(w, h, w && h && !(s_4x3 || s_full || s_pic_w)));
     }
 }
 
