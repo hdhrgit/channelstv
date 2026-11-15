@@ -192,22 +192,23 @@ static void draw_frame(esp_lcd_panel_handle_t panel, uint16_t *strip[2], const u
         // in tiles of 64 panel rows (source columns): at 1:1 a cache line of luma each, used whole. The panel
         // sometimes gets the first column of a window wrong (a dotted line down the picture where a tile starts),
         // so each window starts two columns before its tile and a row of tiles goes right to left: the tile on
-        // the left writes those columns again, and the leftmost one's two go into the border
+        // the left writes those columns again. The leftmost one starts in the black border, or, with the picture
+        // across the whole panel, in the columns the panel doesn't show
         int room = LCD_W * STRIP_LINES, s = 0;
         for (int row = 0; row < W; row += 64) {
             int lines = W - row < 64 ? W - row : 64;
-            int cn = h264_sideways_tile_cols(w, h, W, H, lines, room - 2 * lines);
+            int cn = h264_sideways_tile_cols(w, h, W, H, lines, room - 4 * lines);
             for (int c0 = (H - 1) / cn * cn; c0 >= 0; c0 -= cn, s ^= 1) {
                 int n = H - c0 < cn ? H - c0 : cn;
-                int a = c0 ? c0 - 2 : 0, m = c0 + n - a, lead = !c0 && x >= 2 ? 2 : 0;
+                int a = c0 ? c0 - 2 : 0, m = c0 + n - a, lead = c0 ? 0 : x >= 2 ? 2 : board_lcd_hidden_left() >= 4 ? 4 : 0;
                 int64_t c1 = esp_timer_get_time();
                 STAGE(s_st_conv, h264_i420_sideways_tile(frame, pu, pv, w, h, W, H, rot, row, lines, a, m, strip[s],
                                                          room - lines * m));
                 if (lead) {
                     for (int r = lines - 1; r >= 0; r--) {
-                        uint16_t *o = strip[s] + r * (m + 2);
-                        memmove(o + 2, strip[s] + r * m, m * 2);
-                        o[0] = o[1] = 0;
+                        uint16_t *o = strip[s] + r * (m + lead);
+                        memmove(o + lead, strip[s] + r * m, m * 2);
+                        memset(o, 0, lead * 2);
                     }
                 }
                 conv += esp_timer_get_time() - c1;

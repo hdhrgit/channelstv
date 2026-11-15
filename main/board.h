@@ -75,6 +75,8 @@ esp_codec_dev_handle_t board_speaker(void);
 void board_amp(bool on);
 esp_lcd_panel_io_handle_t board_lcd_io(void);
 esp_lcd_panel_handle_t board_lcd_panel(void);
+// Columns of panel memory left of column 0 that the panel doesn't show (16 on the AMOLED-1.8 V2, else 0)
+int board_lcd_hidden_left(void);
 esp_lcd_touch_handle_t board_touch(void);
 void board_backlight(int percent);
 int board_backlight_percent(void);
