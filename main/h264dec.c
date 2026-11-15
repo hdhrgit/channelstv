@@ -58,6 +58,9 @@ typedef struct {
     int swap;
 } yuv_pie_job_t;
 void yuv_pie_turned(const yuv_pie_job_t *j);
+#if CONFIG_CHANNELSTV_STAGE_TIMING
+volatile int64_t h264_scale_us;
+#endif
 static int16_t s_pie_k[15][8] __attribute__((aligned(16)));
 static int32_t s_pie_tmp[4] __attribute__((aligned(16)));
 
@@ -198,19 +201,44 @@ void h264_i420_turned_to_rgb565be(const uint8_t *py, const uint8_t *pu, const ui
     }
 }
 
-void h264_i420_scaled_turned_to_rgb565be(const uint8_t *py, const uint8_t *pu, const uint8_t *pv, int w, int h, int W,
-                                         int H, int rot, int first, int lines, uint16_t *out)
+// Source columns [xa, xb) and rows [ya, yb) (all even) to out, pixel (x, y) at out + k0 + kx x + ky y with ky +1 or
+// -1: the PIE code for columns from a multiple of 4 in steps of 4, the tables for the rest
+static void block_turned(const uint8_t *py, const uint8_t *pu, const uint8_t *pv, int w, int xa, int xb, int ya, int yb,
+                         uint16_t *out, int k0, int kx, int ky)
 {
-    // panel column c shows picture row Y (c, or H - 1 - c turned the other way), source row sy;
-    // panel row r shows picture column X (W - 1 - r, or r), source column sx
-    static int16_t sy[512], sx[512];
+    board_turn_t t = {.kx = kx, .ky = ky, .k0 = k0, .x0 = xa, .x1 = xb, .y0 = ya, .y1 = yb};
+    int x = xa;
+    if (s_sat == 100 && s_contrast == 100 && !(xa & 3) && !(w & 7) && !((uintptr_t)out & 3)) {
+        int cols = (xb - xa) & ~3;
+        yuv_pie_job_t j = {
+            .w = w, .kx = 2 * kx, .step = 16 * kx, .cols = cols, .k = &s_pie_k[0][0], .tmp = s_pie_tmp, .swap = ky < 0,
+        };
+        for (int y = ya; y < yb && cols; y += 2) {
+            j.y = py + y * w + xa;
+            j.u = pu + (y / 2) * (w / 2) + xa / 2;
+            j.v = pv + (y / 2) * (w / 2) + xa / 2;
+            j.o = out + k0 + kx * xa + ky * y + (ky < 0 ? -1 : 0);
+            yuv_pie_turned(&j);
+        }
+        x += cols;
+    }
+    if (x < xb) {
+        turned_c(py, pu, pv, w, t, x, xb, out);
+    }
+}
+
+// Panel column c shows source row s_sy[c], panel row r source column s_sx[r] (sideways, rot 1 or 3)
+static int16_t s_sy[LCD_MAX_W + 2], s_sx[512];
+
+static void sideways_maps(int w, int h, int W, int H, int rot)
+{
     static int last_w, last_h, last_W, last_H, last_rot;
     if (w != last_w || h != last_h || W != last_W || H != last_H || rot != last_rot) {
-        for (int c = 0; c < H && c < 512; c++) {
-            sy[c] = (rot == 1 ? c : H - 1 - c) * h / H;
+        for (int c = 0; c < H && c < LCD_MAX_W; c++) {
+            s_sy[c] = (rot == 1 ? c : H - 1 - c) * h / H;
         }
         for (int r = 0; r < W && r < 512; r++) {
-            sx[r] = (rot == 1 ? W - 1 - r : r) * w / W;
+            s_sx[r] = (rot == 1 ? W - 1 - r : r) * w / W;
         }
         last_w = w;
         last_h = h;
@@ -218,42 +246,83 @@ void h264_i420_scaled_turned_to_rgb565be(const uint8_t *py, const uint8_t *pu, c
         last_H = H;
         last_rot = rot;
     }
-    // The strip's few source columns, all rows, converted first, as a quarter turn (the PIE path,
-    // h264_i420_turned_to_rgb565be): column by column, each column's rows one after the other. Then
-    // each panel row is one source column picked out row by row: written in order, read close
-    // together. Converting each panel pixel on its own took ~50 ms a frame.
-    static uint16_t *blk;
-    static size_t blk_n;
-    static int blk_first = -1, blk_last, xa, xb;
-    if (first == 0 || first < blk_first || first + lines > blk_last) {
-        int last = first + lines > W ? W : first + lines;
-        int a = sx[first], b = sx[last - 1];
-        xa = (a < b ? a : b) & ~3;                       // the turned path takes 4 columns at a time
-        xb = ((a > b ? a : b) + 4) & ~3;
-        xb = xb > w ? w : xb;
-        if ((size_t)(h * (xb - xa)) > blk_n) {
-            heap_caps_free(blk);
-            blk_n = h * (xb - xa) + h * 8;
-            // in PSRAM: small enough to stay in the cache while it's read, and internal RAM is short
-            blk = heap_caps_malloc(blk_n * 2, MALLOC_CAP_SPIRAM);
-            if (!blk) {
-                blk_n = 0;
-                blk_first = -1;
-                return;
+}
+
+int h264_sideways_tile_cols(int w, int h, int W, int H, int rn, int room)
+{
+    if (W == w && H == h) {
+        int cn = room / rn & ~1;
+        return cn > H ? H : cn;
+    }
+    // the converted source block goes after the tile: at most this many columns and rows
+    int bw = (rn * w + W - 1) / W + 8;
+    for (int cn = H; cn >= 2; cn -= 2) {
+        int bh = (cn * h + H - 1) / H + 4;
+        if (rn * cn + bw * bh <= room) {
+            return cn;
+        }
+    }
+    return 2;
+}
+
+void h264_i420_sideways_tile(const uint8_t *py, const uint8_t *pu, const uint8_t *pv, int w, int h, int W, int H, int rot,
+                             int r0, int rn, int c0, int cn, uint16_t *out, int room)
+{
+    if (W == w && H == h) {
+        // 1:1: the tile's source block straight in, turned
+        if (rot == 1) {
+            int xa = w - r0 - rn, ya = c0; // panel (r, c) shows (w - 1 - r, c)
+            block_turned(py, pu, pv, w, xa, xa + rn, ya, ya + cn, out, (xa + rn - 1) * cn - ya, -cn, 1);
+        } else {
+            int xa = r0, yb = h - c0; // panel (r, c) shows (r, h - 1 - c)
+            block_turned(py, pu, pv, w, xa, xa + rn, yb - cn, yb, out, -xa * cn + yb - 1, cn, -1);
+        }
+        return;
+    }
+    sideways_maps(w, h, W, H, rot);
+    int a = s_sx[r0], b = s_sx[r0 + rn - 1];
+    int xa = (a < b ? a : b) & ~3, xb = ((a > b ? a : b) + 4) & ~3;
+    a = s_sy[c0];
+    b = s_sy[c0 + cn - 1];
+    int ya = (a < b ? a : b) & ~1, yb = ((a > b ? a : b) + 2) & ~1;
+    xb = xb > w ? w : xb;
+    yb = yb > h ? h : yb;
+    int bw = xb - xa, bh = yb - ya;
+    uint16_t *blk = out + rn * cn;
+    if (bw * bh > room) {
+        return; // h264_sideways_tile_cols leaves room for it
+    }
+    // the block turned once (rot 1): source column x at blk + (xb - 1 - x) * bh, its rows in order
+    block_turned(py, pu, pv, w, xa, xb, ya, yb, blk, (xb - 1) * bh - ya, -bh, 1);
+#if CONFIG_CHANNELSTV_STAGE_TIMING
+    int64_t t0 = esp_timer_get_time();
+#endif
+    // two pixels a store (cn is even); a row showing the same source column as the one before is a copy of it;
+    // at 2x across, each source pixel twice
+    const int16_t *sy = s_sy + c0;
+    bool twice = H == 2 * h;
+    for (int r = 0; r < rn; r++) {
+        uint16_t *o = out + r * cn;
+        if (r && s_sx[r0 + r] == s_sx[r0 + r - 1]) {
+            memcpy(o, o - cn, cn * 2);
+            continue;
+        }
+        const uint16_t *src = blk + (xb - 1 - s_sx[r0 + r]) * bh - ya;
+        uint32_t *o2 = (uint32_t *)o;
+        if (twice) {
+            for (int c = 0; c < cn; c += 2) {
+                uint32_t p = src[sy[c]];
+                *o2++ = p | p << 16;
+            }
+        } else {
+            for (int c = 0; c < cn; c += 2) {
+                *o2++ = src[sy[c]] | (uint32_t)src[sy[c + 1]] << 16;
             }
         }
-        // turned once (rot 1): source column x lands at blk + (xb - 1 - x) * h, its rows in order
-        h264_i420_turned_to_rgb565be(py, pu, pv, w, h, 1, w - xb, xb - xa, blk);
-        blk_first = first;
-        blk_last = last;
     }
-    for (int r = first; r < first + lines; r++) {
-        const uint16_t *src = blk + (xb - 1 - sx[r]) * h;
-        uint16_t *o = out + (r - first) * H;
-        for (int c = 0; c < H; c++) {
-            o[c] = src[sy[c]];
-        }
-    }
+#if CONFIG_CHANNELSTV_STAGE_TIMING
+    h264_scale_us += esp_timer_get_time() - t0;
+#endif
 }
 
 void h264_i420_scaled_to_rgb565be(const uint8_t *py, const uint8_t *pu, const uint8_t *pv, int w, int h, int W, int H,
@@ -292,13 +361,90 @@ void h264_i420_scaled_to_rgb565be(const uint8_t *py, const uint8_t *pu, const ui
             pair_y = y0;
             pair_frame = py;
         }
+#if CONFIG_CHANNELSTV_STAGE_TIMING
+        int64_t t0 = esp_timer_get_time();
+#endif
         const uint16_t *src = pair + (sy & 1) * w;
         uint16_t *o = out + (r - first) * W;
         for (int c = 0; c < W; c++) {
             o[c] = src[sx[c]];
         }
+#if CONFIG_CHANNELSTV_STAGE_TIMING
+        h264_scale_us += esp_timer_get_time() - t0;
+#endif
     }
 }
+
+#if CONFIG_CHANNELSTV_STAGE_TIMING
+static uint16_t ref_px(const uint8_t *py, const uint8_t *pu, const uint8_t *pv, int w, int x, int y)
+{
+    int u = pu[(y / 2) * (w / 2) + x / 2], v = pv[(y / 2) * (w / 2) + x / 2], c = s_y[py[y * w + x]];
+    return s_r[c + s_rv[v] + CLAMP_OFF] | s_g[c + s_gu[u] + s_gv[v] + CLAMP_OFF] | s_b[c + s_bu[u] + CLAMP_OFF];
+}
+
+static int px_err(uint16_t a, uint16_t b)
+{
+    a = a >> 8 | a << 8;
+    b = b >> 8 | b << 8;
+    int dr = abs((a >> 11) - (b >> 11)), dg = abs(((a >> 5) & 63) - ((b >> 5) & 63)), db = abs((a & 31) - (b & 31));
+    return dr > dg ? (dr > db ? dr : db) : (dg > db ? dg : db);
+}
+
+// The sideways picture of a made-up w x h frame at W x H (rot 1 or 3) the tile way, against the tables pixel by
+// pixel (mismatches, the largest difference in a 5/6/5 channel) and its time with copying out. JSON into buf.
+int h264_convcheck(char *buf, size_t len, int w, int h, int W, int H, int rot)
+{
+    int lw = LCD_W, room = lw * DRAW_LINES, o = 0;
+    size_t fsz = w * h * 3 / 2 + 64;
+    uint8_t *f = heap_caps_aligned_alloc(64, fsz, MALLOC_CAP_SPIRAM);
+    uint16_t *img = heap_caps_malloc(W * H * 2, MALLOC_CAP_SPIRAM);
+    uint16_t *strip = heap_caps_aligned_alloc(16, room * 2, MALLOC_CAP_INTERNAL);
+    if (!f || !img || !strip || W > 512 || H > lw) {
+        o = snprintf(buf, len, "{\"error\":\"memory or size\"}");
+        goto out;
+    }
+    uint32_t r = 7;
+    for (size_t i = 0; i < fsz; i++) {
+        r = r * 1103515245u + 12345u;
+        f[i] = (r >> 16) & 0xff; // the whole range, past studio levels too
+    }
+    const uint8_t *pu = f + w * h, *pv = pu + (w / 2) * (h / 2);
+    uint16_t *b = img;
+    int64_t t = esp_timer_get_time();
+    for (int row = 0; row < W; row += 64) {
+        int lines = W - row < 64 ? W - row : 64;
+        int cn = h264_sideways_tile_cols(w, h, W, H, lines, room);
+        for (int c0 = 0; c0 < H; c0 += cn) {
+            int n = H - c0 < cn ? H - c0 : cn;
+            h264_i420_sideways_tile(f, pu, pv, w, h, W, H, rot, row, lines, c0, n, strip, room - lines * n);
+            for (int i = 0; i < lines; i++) {
+                memcpy(b + (row + i) * H + c0, strip + i * n, n * 2);
+            }
+        }
+    }
+    int t_tiles = esp_timer_get_time() - t;
+    int bad = 0, max = 0;
+    for (int pr = 0; pr < W; pr++) {
+        int sx = (rot == 1 ? W - 1 - pr : pr) * w / W;
+        for (int pc = 0; pc < H; pc++) {
+            int sy = (rot == 1 ? pc : H - 1 - pc) * h / H;
+            uint16_t ref = ref_px(f, pu, pv, w, sx, sy);
+            int e = px_err(b[pr * H + pc], ref);
+            bad += e != 0;
+            max = e > max ? e : max;
+        }
+    }
+    o = snprintf(buf, len,
+                 "{\"src\":\"%dx%d\",\"out\":\"%dx%d\",\"rot\":%d,\"pixels\":%d,\"tiles_us\":%d,\"bad\":%d,"
+                 "\"max_lsb\":%d}",
+                 w, h, W, H, rot, W * H, t_tiles, bad, max);
+out:
+    heap_caps_free(f);
+    heap_caps_free(img);
+    heap_caps_free(strip);
+    return o;
+}
+#endif
 
 void h264_i420_to_rgb565be(const uint8_t *yuv, int stride, int coded_h, int w, int h, uint16_t *out)
 {

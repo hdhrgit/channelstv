@@ -3,7 +3,9 @@
 #pragma once
 
 #include <stdbool.h>
+#include <stddef.h>
 #include <stdint.h>
+#include "sdkconfig.h"
 
 typedef struct h264dec h264dec_t;
 
@@ -39,10 +41,21 @@ void h264_i420_rows_to_rgb565be(const uint8_t *py, const uint8_t *pu, const uint
 // its rows [first, first + lines), (rot & 1 ? h : w) wide (board_turn).
 void h264_i420_turned_to_rgb565be(const uint8_t *py, const uint8_t *pu, const uint8_t *pv, int w, int h, int rot,
                                   int first, int lines, uint16_t *out);
-// The same, a quarter turn (rot 1 or 3) and stretched to W x H on the way (nearest pixel): the
-// panel block is H wide and W tall, and this makes its rows [first, first + lines).
-void h264_i420_scaled_turned_to_rgb565be(const uint8_t *py, const uint8_t *pu, const uint8_t *pv, int w, int h, int W,
-                                         int H, int rot, int first, int lines, uint16_t *out);
+// A compact w x h I420 picture a quarter turn (rot 1 or 3) and stretched to W x H on the way (nearest pixel; W == w
+// and H == h: 1:1), as the panel gets it sideways (the block H wide and W tall), a tile at a time: its rows [r0, r0 + rn) and columns [c0, c0 + cn) into out, cn a row, with room pixels after the
+// tile for the scaled way's converted source block. rn a multiple of 4, c0 and cn even. Each 64-byte line read from
+// the frame is then used for many pixels, where a strip of a few source columns uses a few of its bytes.
+void h264_i420_sideways_tile(const uint8_t *py, const uint8_t *pu, const uint8_t *pv, int w, int h, int W, int H, int rot,
+                             int r0, int rn, int c0, int cn, uint16_t *out, int room);
+// The widest tile (even) for rn rows that, with its source block, fits in room pixels
+int h264_sideways_tile_cols(int w, int h, int W, int H, int rn, int room);
 // Rows [first, first + lines) of the w x h picture scaled up to W x H upright (nearest pixel)
 void h264_i420_scaled_to_rgb565be(const uint8_t *py, const uint8_t *pu, const uint8_t *pv, int w, int h, int W, int H,
                                   int first, int lines, uint16_t *out);
+
+#if CONFIG_CHANNELSTV_STAGE_TIMING
+// Microseconds the scaling functions spent picking pixels (not converting), for the stage timings
+extern volatile int64_t h264_scale_us;
+// The sideways picture of a made-up frame the tile way, checked against the tables (not while playing)
+int h264_convcheck(char *buf, size_t len, int w, int h, int W, int H, int rot);
+#endif

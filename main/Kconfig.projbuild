@@ -34,4 +34,11 @@ config CHANNELSTV_WIFI_OUTAGE_TEST
         settings stay as they are, and the next start after that is normal. For testing the setup
         hotspot that opens when the board hasn't joined two minutes after start. Not for releases.
 
+config CHANNELSTV_STAGE_TIMING
+    bool "Measure: time each stage of drawing a video frame"
+    default n
+    help
+        Adds "stages" to /api/perf: the mean microseconds per drawn frame spent waiting for the panel's
+        refresh, converting to RGB565, scaling, sending to the panel and in all. Not for releases.
+
 endmenu

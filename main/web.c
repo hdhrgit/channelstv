@@ -470,6 +470,16 @@ static esp_err_t perf(httpd_req_t *req)
     return err;
 }
 
+#if CONFIG_CHANNELSTV_STAGE_TIMING
+static esp_err_t convcheck(httpd_req_t *req)
+{
+    char buf[400];
+    h264_convcheck(buf, sizeof(buf), query_int(req, "w", 448), query_int(req, "h", 368), query_int(req, "ow", 448),
+                   query_int(req, "oh", 368), query_int(req, "rot", 1));
+    return send_raw_json(req, buf);
+}
+#endif
+
 static esp_err_t perf_hashes(httpd_req_t *req)
 {
     char *buf = heap_caps_malloc(32768, MALLOC_CAP_SPIRAM);
@@ -757,7 +767,11 @@ void web_apply(void)
     cfg.stack_size = 8192;
     // above the H.264 decoder (7): a board that can't keep up with a stream still answers
     cfg.task_priority = 8;
+#if CONFIG_CHANNELSTV_STAGE_TIMING
+    cfg.max_uri_handlers = 28;
+#else
     cfg.max_uri_handlers = 27;
+#endif
     cfg.recv_wait_timeout = 15;
     // a browser keeps several connections open per page: close the idlest instead of refusing
     cfg.lru_purge_enable = true;
@@ -791,6 +805,9 @@ void web_apply(void)
         {"/api/tv", HTTP_GET, {tv, FULL}},
         {"/api/perf", HTTP_GET, {perf, FULL}},
         {"/api/perf/hashes", HTTP_GET, {perf_hashes, FULL}},
+#if CONFIG_CHANNELSTV_STAGE_TIMING
+        {"/api/convcheck", HTTP_GET, {convcheck, FULL}},
+#endif
         {"/api/touch", HTTP_GET, {touch, FULL}},
         {"/api/screen", HTTP_GET, {screen, FULL}},
 #if CONFIG_CHANNELSTV_WIFI_OUTAGE_TEST

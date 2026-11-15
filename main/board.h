@@ -20,7 +20,7 @@ extern int g_lcd_w, g_lcd_h;
 #define LCD_H g_lcd_h
 #define LCD_MAX_W 368 // the widest of the boards' panels
 // Rows in each of LVGL's two draw buffers (internal DMA RAM; playback borrows them as its strips):
-// 20 (448 rows of the AMOLED in 23 strips, the last one 8): fewer strips keep the sideways picture fast
+// 20 (448 rows of the AMOLED in 23 strips, the last one 8); the sideways picture goes out in tiles of the same size
 #define DRAW_LINES 20
 #define SAMPLE_RATE 44100
 
