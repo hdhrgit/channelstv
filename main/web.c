@@ -479,6 +479,31 @@ static esp_err_t perf(httpd_req_t *req)
 }
 
 #if CONFIG_CHANNELSTV_STAGE_TIMING
+// Each task's run time (us since start) and core: two of these a while apart give each task's share
+static esp_err_t tasks(httpd_req_t *req)
+{
+    int n = uxTaskGetNumberOfTasks() + 4;
+    TaskStatus_t *ts = heap_caps_malloc(n * sizeof(*ts), MALLOC_CAP_SPIRAM);
+    char *buf = heap_caps_malloc(4096, MALLOC_CAP_SPIRAM);
+    if (!ts || !buf) {
+        heap_caps_free(ts);
+        heap_caps_free(buf);
+        return httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "memory");
+    }
+    n = uxTaskGetSystemState(ts, n, NULL);
+    int o = 0;
+    for (int i = 0; i < n && o < 3900; i++) {
+        BaseType_t core = xTaskGetCoreID(ts[i].xHandle);
+        o += snprintf(buf + o, 4096 - o, "%s %d %d %lu\n", ts[i].pcTaskName, (int)core, (int)ts[i].uxCurrentPriority,
+                      (unsigned long)ts[i].ulRunTimeCounter);
+    }
+    httpd_resp_set_type(req, "text/plain");
+    esp_err_t e = httpd_resp_send(req, buf, o);
+    heap_caps_free(ts);
+    heap_caps_free(buf);
+    return e;
+}
+
 static esp_err_t convcheck(httpd_req_t *req)
 {
     char buf[400];
@@ -790,7 +815,7 @@ void web_apply(void)
     // above the H.264 decoder (7): a board that can't keep up with a stream still answers
     cfg.task_priority = 8;
 #if CONFIG_CHANNELSTV_STAGE_TIMING
-    cfg.max_uri_handlers = 28;
+    cfg.max_uri_handlers = 29;
 #else
     cfg.max_uri_handlers = 27;
 #endif
@@ -829,6 +854,7 @@ void web_apply(void)
         {"/api/perf/hashes", HTTP_GET, {perf_hashes, FULL}},
 #if CONFIG_CHANNELSTV_STAGE_TIMING
         {"/api/convcheck", HTTP_GET, {convcheck, FULL}},
+        {"/api/tasks", HTTP_GET, {tasks, FULL}},
 #endif
         {"/api/touch", HTTP_GET, {touch, FULL}},
         {"/api/screen", HTTP_GET, {screen, FULL}},
