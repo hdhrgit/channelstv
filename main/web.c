@@ -548,9 +548,11 @@ static esp_err_t screen(httpd_req_t *req)
             }
         }
         heap_caps_free(line);
-    } else if (tv_playing() && tv_first_picture_ms()) {
+    } else if (tv_playing()) {
+        // playback holds LVGL, or a start is taking it over: a snapshot of the tuning screen then restarted
+        // the board (interrupt watchdog)
         heap_caps_free(bmp);
-        return httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "no frame"); // playback holds LVGL
+        return httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, tv_first_picture_ms() ? "no frame" : "starting");
     } else {
         if (!lvgl_port_lock(1000)) {
             heap_caps_free(bmp);
