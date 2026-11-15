@@ -189,19 +189,31 @@ static void draw_frame(esp_lcd_panel_handle_t panel, uint16_t *strip[2], const u
         const uint8_t *pu = frame + w * h, *pv = pu + (w / 2) * (h / 2);
         STAGE(s_st_wait, board_wait_scan(0));
         int64_t t0 = esp_timer_get_time(), conv = 0;
-        // in tiles of 64 panel rows (source columns): at 1:1 a cache line of luma each, used whole
+        // in tiles of 64 panel rows (source columns): at 1:1 a cache line of luma each, used whole. The panel
+        // sometimes gets the first column of a window wrong (a dotted line down the picture where a tile starts),
+        // so each window starts two columns before its tile and a row of tiles goes right to left: the tile on
+        // the left writes those columns again, and the leftmost one's two go into the border
         int room = LCD_W * STRIP_LINES, s = 0;
         for (int row = 0; row < W; row += 64) {
             int lines = W - row < 64 ? W - row : 64;
-            int cn = h264_sideways_tile_cols(w, h, W, H, lines, room);
-            for (int c0 = 0; c0 < H; c0 += cn, s ^= 1) {
+            int cn = h264_sideways_tile_cols(w, h, W, H, lines, room - 2 * lines);
+            for (int c0 = (H - 1) / cn * cn; c0 >= 0; c0 -= cn, s ^= 1) {
                 int n = H - c0 < cn ? H - c0 : cn;
+                int a = c0 ? c0 - 2 : 0, m = c0 + n - a, lead = !c0 && x >= 2 ? 2 : 0;
                 int64_t c1 = esp_timer_get_time();
-                STAGE(s_st_conv, h264_i420_sideways_tile(frame, pu, pv, w, h, W, H, rot, row, lines, c0, n, strip[s],
-                                                         room - lines * n));
+                STAGE(s_st_conv, h264_i420_sideways_tile(frame, pu, pv, w, h, W, H, rot, row, lines, a, m, strip[s],
+                                                         room - lines * m));
+                if (lead) {
+                    for (int r = lines - 1; r >= 0; r--) {
+                        uint16_t *o = strip[s] + r * (m + 2);
+                        memmove(o + 2, strip[s] + r * m, m * 2);
+                        o[0] = o[1] = 0;
+                    }
+                }
                 conv += esp_timer_get_time() - c1;
                 esp_err_t err;
-                STAGE(s_st_push, err = esp_lcd_panel_draw_bitmap(panel, x + c0, row, x + c0 + n, row + lines, strip[s]));
+                STAGE(s_st_push, err = esp_lcd_panel_draw_bitmap(panel, x + a - lead, row, x + c0 + n, row + lines,
+                                                                 strip[s]));
                 if (err != ESP_OK && !s_draw_err[0]) {
                     snprintf(s_draw_err, sizeof(s_draw_err), "draw row %d: %s", row, esp_err_to_name(err));
                 }
