@@ -284,7 +284,7 @@ static bool settings_under_note(void)
     return s_note && !lv_obj_has_flag(s_note, LV_OBJ_FLAG_HIDDEN) && !lv_obj_has_flag(s_row[ROWS - 1], LV_OBJ_FLAG_HIDDEN);
 }
 
-enum { SET_TOUCH, SET_PICTURE, SET_FPS, SET_SCALE, SET_ROTATION, SET_BRIGHT, SET_DIM, SET_OFF, SET_OTA, SET_WEB, SET_FIND, SET_VERSION,
+enum { SET_TOUCH, SET_PICTURE, SET_FPS, SET_SCALE, SET_BITRATE, SET_ROTATION, SET_BRIGHT, SET_DIM, SET_OFF, SET_OTA, SET_WEB, SET_FIND, SET_VERSION,
        SET_N };
 
 // The Settings rows this board shows, in order: Frame rate and Upscaling only on the larger panel
@@ -312,7 +312,7 @@ static int page_first(int page, int total)
 // Settings, a page at a time like any folder.
 static void settings_rows(void)
 {
-    static const char *const titles[SET_N] = {"Touch test", "Picture", "Frame rate", "Upscaling", "Rotation", "Backlight", "Dim", "Off",
+    static const char *const titles[SET_N] = {"Touch test", "Picture", "Frame rate", "Upscaling", "Bitrate", "Rotation", "Backlight", "Dim", "Off",
                                               "OTA updates", "Web control", "Find the bridge again", "Version"};
     static const char *const web[] = {"full", "read-only", "off"};
     static const char *const rotations[] = {"auto", "0\u00b0", "90\u00b0", "180\u00b0", "270\u00b0"};
@@ -332,6 +332,14 @@ static void settings_rows(void)
         } else if (k == SET_SCALE) {
             static const char *const scales[] = {"off", "1.5x", "2x"};
             snprintf(e->title, sizeof(e->title), "Upscaling: %s", scales[(bridge_scale() - 10) / 5]);
+        } else if (k == SET_BITRATE) {
+            int kbps = bridge_kbps();
+            if (!kbps) {
+                strlcpy(e->title, "Bitrate: auto", sizeof(e->title));
+            } else {
+                // kbps; over 700 the board may stutter (a warning sign: "may stutter" doesn't fit a row)
+                snprintf(e->title, sizeof(e->title), "Bitrate: %d%s", kbps, kbps > 700 ? " \u26a0" : "");
+            }
         } else if (k == SET_WEB) {
             snprintf(e->title, sizeof(e->title), "Web control: %s", web[app_web_mode()]);
         } else if (k == SET_OTA) {
@@ -1711,6 +1719,16 @@ static void activate_row(int i)
             bridge_set_scale(bridge_scale() == 10 ? 15 : bridge_scale() == 15 ? 20 : 10);
             settings_rows();
             break;
+        case SET_BITRATE: { // auto, 250, 400, 550, 700, 1000, 1500, auto, ...
+            static const int steps[] = {0, 250, 400, 550, 700, 1000, 1500};
+            int i = 0;
+            while (i < 6 && steps[i] != bridge_kbps()) {
+                i++;
+            }
+            bridge_set_kbps(steps[(i + 1) % 7]);
+            settings_rows();
+            break;
+        }
         case SET_ROTATION: // auto, 0, 90, 180, 270, auto, ...
             rotate_set(rotate_setting() >= 3 ? ROTATE_AUTO : rotate_setting() + 1);
             settings_rows();

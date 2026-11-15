@@ -56,6 +56,10 @@ void bridge_set_fps(int fps);
 // Saved in NVS; always 10 on the 240x240 panel.
 int bridge_scale(void);
 void bridge_set_scale(int tenths);
+// The video bitrate the board asks the bridge for (vb=): 0 is Auto (by the picture's pixels a second, 250 to
+// 700 kbps), or 250, 400, 550, 700, 1000 or 1500 kbps as it is (at most what the bridge takes). Saved in NVS.
+int bridge_kbps(void);
+void bridge_set_kbps(int kbps);
 
 typedef struct {
     char id[80];

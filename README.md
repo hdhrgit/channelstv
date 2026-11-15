@@ -134,7 +134,9 @@ The setup page then offers **Back to <network>** for the one just forgotten.
   the middle of the picture cropped to the screen's shape), on the AMOLED-1.8 Frame rate (24, 20
   or 15 fps, default 15: what the board asks the bridge for; the 1.54 always asks for 24) and
   Upscaling (off, 1.5x or 2x: a smaller picture from the bridge, scaled up, for a smoother frame
-  rate on a busy channel), Rotation, Backlight
+  rate on a busy channel), Bitrate (Auto, or 250, 400, 550, 700, 1000 or 1500 kbps; Auto asks for 250 to 700
+  by the picture's size and frame rate; over 700 kbps the board may drop frames or stutter, and the row shows ⚠),
+  Rotation, Backlight
   (20 to 100 %), Dim and Off (on battery, after 30 s or 1, 5 or 10 minutes untouched, and after
   1, 5, 10 or 30 minutes, or never; a touch or key brings it back), Find the bridge again, and
   Version & board (the firmware version; tap it for the board's address, the bridge's address,
@@ -189,7 +191,7 @@ the screen. The API (all `GET` unless shown):
 | `/api/status` | the board, Wi-Fi, battery, memory, the bridge, playback, Web control and OTA | yes |
 | `/chips`, `/api/chips` | the board and its chips, their IDs, and what the motion sensor, battery and touch read now | yes |
 | `POST /api/ota` | an app image (`channelstv-<version>-ota.bin`) to flash and restart into | its own switch |
-| `/api/settings?bridge=host[:port]&picture=16x9\|4x3\|full&fps=15\|20\|24&scale=1\|1.5\|2&volume=0..100&brightness=20..100&dim=30s\|1\|5\|10\|never&off=1\|5\|10\|30\|never` | sets any of them; `bridge=` empty goes back to finding it. `picture=full`, `fps` and `scale` are the AMOLED-1.8's; the 1.54 neither takes nor reports `fps` and `scale` | |
+| `/api/settings?bridge=host[:port]&picture=16x9\|4x3\|full&fps=15\|20\|24&scale=1\|1.5\|2&bitrate=auto\|250\|400\|550\|700\|1000\|1500&volume=0..100&brightness=20..100&dim=30s\|1\|5\|10\|never&off=1\|5\|10\|30\|never` | sets any of them; `bridge=` empty goes back to finding it. `picture=full`, `fps` and `scale` are the AMOLED-1.8's; the 1.54 neither takes nor reports `fps` and `scale` | |
 | `/api/settings?size=WxH&tesync=0\|1` | until the next start: another picture size to ask the bridge for (`0x0`: the board's own), and the AMOLED-1.8's frame timing | |
 | `/api/rescan` | looks for the bridge again | |
 | `/api/browse?id=ID&start=N` | a page of a folder (`0` is the top) | |
@@ -239,9 +241,9 @@ the DVR's original stream, which the board can't decode. For the centre 4:3 of t
 `w=240&h=192&fit=crop43` to the stream URLs, which needs dlna-bridge v0.99.10 or later. The
 AMOLED-1.8 adds its screen's size instead (`w=448&h=368` sideways), with `fit=width` for 16:9
 and `fit=height` for the 4:3 centre and Fill screen, and `fps=`.
-Both add `vb=`, a video bitrate for the picture they ask for: 0.55 bits a pixel, from 250 to 700 kbps, less
-the more pixels a second the board has to decode (460 kbps for the 1.54's 240x144, 250 for the AMOLED-1.8's
-448x368 at 24 fps). It takes the place of the profile's `video_kbps`.
+Both add `vb=`, a video bitrate: Settings → Bitrate, or with Auto one for the picture they ask for, 0.55 bits a
+pixel from 250 to 700 kbps, less the more pixels a second the board has to decode (460 kbps for the 1.54's
+240x144, 250 for the AMOLED-1.8's 448x368 at 24 fps). It takes the place of the profile's `video_kbps`.
 
 Newer bridges have the `esp32` profile built in, so there is nothing to add; a client named
 `esp32` in the bridge's settings still takes its place, for tuning. On older ones, add it as

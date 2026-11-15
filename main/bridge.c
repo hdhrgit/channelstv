@@ -39,6 +39,8 @@ static char s_override[64];
 static bool s_4x3;
 static bool s_full; // the picture fills the larger panel: its middle, cropped to the panel's shape
 static int s_fps;
+static int s_kbps;              // Bitrate: 0 (Auto) or kbps
+static int s_kbps_max = 1500;   // the most the bridge takes (its /api/caps), where known
 static int s_scale = 10;
 static volatile unsigned s_gen;
 static volatile bool s_rescan = true;
@@ -387,6 +389,10 @@ static void check_profiles(const char *base, char *buf)
         snprintf(url, sizeof(url), "%s/api/caps", base);
         cJSON *caps = http_get(url, buf, DESC_MAX, 4000) > 0 ? cJSON_Parse(buf) : NULL;
         const cJSON *fits = cJSON_GetObjectItem(caps, "fits");
+        const cJSON *vb = cJSON_GetObjectItem(cJSON_GetObjectItem(caps, "max"), "vb");
+        if (cJSON_IsNumber(vb) && vb->valueint >= 250) {
+            s_kbps_max = vb->valueint;
+        }
         if (cJSON_IsArray(fits)) {
             bool w = false, h = false;
             const cJSON *f;
@@ -640,6 +646,24 @@ void bridge_set_fps(int fps)
     nvs_put("fps", v);
 }
 
+static bool kbps_ok(int kbps)
+{
+    return kbps == 250 || kbps == 400 || kbps == 550 || kbps == 700 || kbps == 1000 || kbps == 1500;
+}
+
+int bridge_kbps(void)
+{
+    return s_kbps;
+}
+
+void bridge_set_kbps(int kbps)
+{
+    s_kbps = kbps_ok(kbps) ? kbps : 0;
+    char v[8];
+    snprintf(v, sizeof(v), "%d", s_kbps);
+    nvs_put("kbps", v);
+}
+
 void bridge_start(bool (*online)(void))
 {
     s_online = online;
@@ -654,6 +678,8 @@ void bridge_start(bool (*online)(void))
     nvs_str("fps", p, sizeof(p));
     int fps = atoi(p); // an earlier "0" (the bridge's own rate) gets the default
     s_fps = LCD_W * LCD_H > 240 * 240 && (fps == 15 || fps == 20 || fps == 24) ? fps : fps_default();
+    nvs_str("kbps", p, sizeof(p));
+    s_kbps = kbps_ok(atoi(p)) ? atoi(p) : 0;
     // internal stack: it writes NVS (flash)
     xTaskCreate(bridge_task, "bridge", 6144, NULL, 3, &s_task);
 }
@@ -752,8 +778,9 @@ static void with_profile(const char *url, char *out, size_t len)
     }
     if (!strstr(out, "vb=")) {
         size_t n = strlen(out);
-        snprintf(out + n, len - n, "%cvb=%d", strchr(out, '?') ? '&' : '?',
-                 video_kbps(w, h, w && h && !(s_4x3 || s_full || s_pic_w)));
+        int kbps = s_kbps ? (s_kbps > s_kbps_max ? s_kbps_max : s_kbps)
+                          : video_kbps(w, h, w && h && !(s_4x3 || s_full || s_pic_w));
+        snprintf(out + n, len - n, "%cvb=%d", strchr(out, '?') ? '&' : '?', kbps);
     }
 }
 

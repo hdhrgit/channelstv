@@ -75,6 +75,13 @@
       <option value="2">2x</option>
     </select>
   </div>
+  <label for="bitrate">Bitrate</label>
+  <select id="bitrate">
+    <option value="auto">Auto (by the picture's size and frame rate)</option>
+    <option value="250">250 kbps</option><option value="400">400 kbps</option><option value="550">550 kbps</option>
+    <option value="700">700 kbps</option><option value="1000">1000 kbps</option><option value="1500">1500 kbps</option>
+  </select>
+  <div class="hint" id="bitratewarn" hidden>Over 700 kbps the board may drop frames or stutter.</div>
   <label for="rotation">Rotation</label>
   <select id="rotation">
     <option value="auto">Auto (follows how the board is held)</option>
@@ -153,16 +160,18 @@ async function refresh() {
       $('volume').value = s.volume;
       $('volv').textContent = s.volume + '%';
       fetch('/api/rotation').then(r => r.json()).then(r => $('rotation').value = String(r.setting)).catch(() => {});
-      fetch('/api/settings').then(r => r.json()).then(r => { if (r.fps !== undefined) { $('fpsrow').hidden = false; $('fps').value = String(r.fps); } if (r.scale !== undefined) { $('scalerow').hidden = false; $('picfull').hidden = false; $('scale').value = String(r.scale); } $('brightness').value = String(r.brightness); $('dim').value = String(r.dim); $('off').value = String(r.off); }).catch(() => {});
+      fetch('/api/settings').then(r => r.json()).then(r => { if (r.fps !== undefined) { $('fpsrow').hidden = false; $('fps').value = String(r.fps); } if (r.scale !== undefined) { $('scalerow').hidden = false; $('picfull').hidden = false; $('scale').value = String(r.scale); } $('bitrate').value = String(r.bitrate ?? 'auto'); bitrateWarn(); $('brightness').value = String(r.brightness); $('dim').value = String(r.dim); $('off').value = String(r.off); }).catch(() => {});
     }
   } catch (e) {
     $('status').innerHTML = '<dt>Status</dt><dd class="bad">the board doesn\'t answer</dd>';
   }
 }
 
+function bitrateWarn() { $('bitratewarn').hidden = !(Number($('bitrate').value) > 700); }
+$('bitrate').onchange = bitrateWarn;
 $('volume').oninput = () => $('volv').textContent = $('volume').value + '%';
 $('save').onclick = async () => {
-  const q = new URLSearchParams({bridge: $('bridge').value.trim(), picture: $('picture').value, ...($('fpsrow').hidden ? {} : {fps: $('fps').value}), ...($('scalerow').hidden ? {} : {scale: $('scale').value}), volume: $('volume').value, brightness: $('brightness').value, dim: $('dim').value, off: $('off').value});
+  const q = new URLSearchParams({bridge: $('bridge').value.trim(), picture: $('picture').value, ...($('fpsrow').hidden ? {} : {fps: $('fps').value}), ...($('scalerow').hidden ? {} : {scale: $('scale').value}), bitrate: $('bitrate').value, volume: $('volume').value, brightness: $('brightness').value, dim: $('dim').value, off: $('off').value});
   await fetch('/api/settings?' + q);
   await fetch('/api/rotation?set=' + $('rotation').value);
   setTimeout(refresh, 500);
