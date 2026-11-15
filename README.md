@@ -108,7 +108,11 @@ The setup page then offers **Back to <network>** for the one just forgotten.
     screen until the first picture (the DVR can take 15-30 s to start a channel; a tap there
     cancels).
   - In Live TV, a long press opens a number pad: type a channel number (`.` for subchannels) and
-    tap ▶. Swipe left (or tap the heading) to delete a digit.
+    tap ▶. Swipe left (or tap the heading) to delete a digit. Other folders get it too when they
+    hold more than 20 items (up to 1000), each starting with a number of its own ("7.1 ...", like
+    a source's channel list); ▶ then plays the item there that starts with that number. The
+    board reads such a folder through in the background once it's open; a long press before
+    that's done shows "Checking...", and one anywhere else "No number pad here".
 - **While playing:** tap the picture for the controls, a 3x3 grid that hides after 4 s: channel
   down / Info / channel up, volume down / Stop / volume up, Back / the title / Hide. Swipe up or
   down for the next or previous channel (the next or previous item of the folder), swipe right

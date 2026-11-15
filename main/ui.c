@@ -4,9 +4,10 @@
 //
 // Made for fingers on a 1.54" screen: four rows a page, each the full width and 50 px tall,
 // under a slim heading. Swipe up / down for the next / previous page, swipe right (or tap the
-// heading's left end) to go back, tap a row to open or play it. A long press on Live TV opens a
-// number pad. One object over the whole screen takes every touch and works out what it was from
-// the points: a swipe moves over SWIPE_PX within SWIPE_MS, a tap less than TAP_PX.
+// heading's left end) to go back, tap a row to open or play it. A long press opens a number pad
+// in Live TV and in a folder of 20+ items that each start with a number of their own. One object
+// over the whole screen takes every touch and works out what it was from the points: a swipe
+// moves over SWIPE_PX within SWIPE_MS, a tap less than TAP_PX.
 
 #include "ui.h"
 
@@ -163,6 +164,9 @@ static bool s_t_stopped; // the touch stopped a slide: no tap
 static int s_pressed_row = -1;
 
 static char s_digits[12]; // typed on the number pad
+static char s_pad_folder[80]; // where it plays from: "live", or a folder of numbered items
+static volatile bool s_browsing; // browse_task is fetching a page: the number pad's scan waits
+static void pad_check_page(const char *id, const cd_entry_t *e, int n, int total);
 static int s_cal_step;
 static int s_cal_raw[5][2];
 static const int s_cal_at[5][2] = {{30, 30}, {210, 30}, {210, 210}, {30, 210}, {120, 120}}; // on 240 x 240
@@ -460,7 +464,9 @@ static void browse_task(void *arg)
             continue; // a newer one is waiting: that's the one to answer
         }
         int total = 0;
+        s_browsing = true;
         int n = bridge_browse(req.id, req.start, ROWS, fresh, &total);
+        s_browsing = false;
         bool top = !strcmp(req.id, "0");
         if (top && n >= 0 && req.start + n >= total && n < ROWS) {
             cd_entry_t *e = &fresh[n++];
@@ -485,6 +491,7 @@ static void browse_task(void *arg)
             if (n >= 0) {
                 s_stack[s_depth - 1].total = total;
             }
+            pad_check_page(req.id, fresh, n, total);
             s_loading_us = 0;
             s_result_gen++;
             lvgl_port_unlock();
@@ -1269,30 +1276,234 @@ static bool in_live(void)
     return !strcmp(s_stack[s_depth - 1].id, "live");
 }
 
-// Looks for channel s_digits in the Live TV folder and plays it.
+#define PAD_MIN_ITEMS 20   // a folder with more items than this, each starting with its own number,
+#define PAD_SCAN_MAX  1000 // and no more than this, gets the number pad too
+#define PAD_NUM_LEN   12
+
+// The number title starts with ("7.1 News": "7.1"), into out; false if it has none (or a long
+// one). A '.' belongs to it only with a digit after it, so "7. News" is 7.
+static bool title_number(const char *title, char out[PAD_NUM_LEN])
+{
+    size_t n = 0;
+    while ((title[n] >= '0' && title[n] <= '9') ||
+           (title[n] == '.' && n && title[n + 1] >= '0' && title[n + 1] <= '9')) {
+        n++;
+    }
+    if (!n || n >= PAD_NUM_LEN) {
+        return false;
+    }
+    memcpy(out, title, n);
+    out[n] = '\0';
+    return true;
+}
+
+static void pad_open(const char *folder)
+{
+    strlcpy(s_pad_folder, folder, sizeof(s_pad_folder));
+    s_view = VIEW_PAD;
+    s_digits[0] = '\0';
+    s_result_gen++;
+}
+
+static int cmp_num(const void *a, const void *b)
+{
+    return strcmp(a, b);
+}
+
+// Which folders get the number pad, besides Live TV: worked out when one is opened.
+#define PAD_KNOWN 8
+static struct {
+    char id[80];
+    bool ok;
+} s_pad_known[PAD_KNOWN];
+static int s_pad_known_next;
+
+typedef struct {
+    char id[80];
+    int depth;
+} scan_t;
+static QueueHandle_t s_scans;
+static scan_t s_scan;            // the folder scan_task reads (with s_scanning)
+static volatile bool s_scanning;
+static bool s_pad_waiting;       // a long press waits for the scan
+static int64_t s_pad_wait_t0;
+static bool s_scan_toasted;      // "Checking..." is up (a wait longer than PAD_CHECK_US)
+#define PAD_CHECK_US 300000
+
+static int pad_known(const char *id) // 1 the pad, 0 not, -1 not known
+{
+    for (int i = 0; i < PAD_KNOWN; i++) {
+        if (s_pad_known[i].id[0] && !strcmp(s_pad_known[i].id, id)) {
+            return s_pad_known[i].ok;
+        }
+    }
+    return -1;
+}
+
+static void pad_remember(const char *id, bool ok)
+{
+    strlcpy(s_pad_known[s_pad_known_next].id, id, sizeof(s_pad_known[0].id));
+    s_pad_known[s_pad_known_next].ok = ok;
+    s_pad_known_next = (s_pad_known_next + 1) % PAD_KNOWN;
+}
+
+static void pad_forget_all(void)
+{
+    memset(s_pad_known, 0, sizeof(s_pad_known));
+}
+
+// Holding the port lock: scan the folder on top of the stack, unless that's under way.
+static void pad_scan_start(void)
+{
+    const char *id = s_stack[s_depth - 1].id;
+    if (s_scanning && s_scan.depth == s_depth && !strcmp(s_scan.id, id)) {
+        return;
+    }
+    strlcpy(s_scan.id, id, sizeof(s_scan.id));
+    s_scan.depth = s_depth;
+    s_scanning = true;
+    xQueueOverwrite(s_scans, &s_scan);
+}
+
+// Holding the port lock: a page of folder id came back. Whether the folder gets the number pad
+// shows on that page for most, and otherwise scan_task reads the rest.
+static void pad_check_page(const char *id, const cd_entry_t *e, int n, int total)
+{
+    char num[PAD_NUM_LEN];
+    if (s_depth == 1 || !strcmp(id, "live") || pad_known(id) >= 0 || n <= 0) {
+        return;
+    }
+    bool ok = total > PAD_MIN_ITEMS && total <= PAD_SCAN_MAX;
+    for (int i = 0; i < n && ok; i++) {
+        ok = !e[i].container && title_number(e[i].title, num);
+    }
+    if (!ok) {
+        pad_remember(id, false);
+    } else {
+        pad_scan_start();
+    }
+}
+
+// Holding the port lock: the folder scanned is still the one shown, and nothing plays.
+static bool scan_still_wanted(const scan_t *sc)
+{
+    return s_depth == sc->depth && !strcmp(s_stack[sc->depth - 1].id, sc->id) && !s_play_busy &&
+           !tv_playing() && !uxQueueMessagesWaiting(s_scans);
+}
+
+// Holding the port lock: a scan has ended. Answers the long press waiting for it, if any.
+static void pad_answer(const scan_t *sc, bool done, bool ok)
+{
+    if (!s_pad_waiting) {
+        return;
+    }
+    s_pad_waiting = false;
+    if (done && !ok && scan_still_wanted(sc) && s_view == VIEW_LIST) {
+        toast("No number pad here", 2000);
+        return;
+    }
+    lv_obj_add_flag(s_toast, LV_OBJ_FLAG_HIDDEN); // "Checking..."
+    s_toast_until = 0;
+    if (done && scan_still_wanted(sc) && s_view == VIEW_LIST) {
+        pad_open(sc->id);
+    } // else left meanwhile, or the bridge didn't answer
+}
+
+// Reads the whole of a folder, behind the pages shown: does every item start with a number of
+// its own? Given up when the folder is left.
+static void scan_task(void *arg)
+{
+    static EXT_RAM_BSS_ATTR cd_entry_t e[20];
+    static EXT_RAM_BSS_ATTR char num[PAD_SCAN_MAX][PAD_NUM_LEN];
+    scan_t sc;
+    while (true) {
+        xQueueReceive(s_scans, &sc, portMAX_DELAY);
+        int total = 1, seen = 0;
+        bool ok = true, done = true;
+        for (int start = 0; start < total && ok; start += 20) {
+            while (s_browsing || uxQueueMessagesWaiting(s_requests)) {
+                vTaskDelay(pdMS_TO_TICKS(20)); // a page to show goes first
+            }
+            lvgl_port_lock(0);
+            done = scan_still_wanted(&sc);
+            lvgl_port_unlock();
+            int n = done ? bridge_browse(sc.id, start, 20, e, &total) : -1;
+            if (n <= 0) {
+                done = false;
+                break;
+            }
+            ok = total > PAD_MIN_ITEMS && total <= PAD_SCAN_MAX;
+            for (int i = 0; i < n && ok; i++) {
+                ok = !e[i].container && seen < PAD_SCAN_MAX && title_number(e[i].title, num[seen++]);
+            }
+        }
+        if (done && ok) {
+            qsort(num, seen, PAD_NUM_LEN, cmp_num);
+            for (int i = 1; i < seen && ok; i++) {
+                ok = strcmp(num[i - 1], num[i]) != 0;
+            }
+        }
+        lvgl_port_lock(0);
+        if (done) {
+            pad_remember(sc.id, ok);
+        }
+        if (!uxQueueMessagesWaiting(s_scans)) { // else another folder's turn: a long press waits for that
+            s_scanning = false;
+            pad_answer(&sc, done, ok);
+        }
+        lvgl_port_unlock();
+    }
+}
+
+// A long press in a folder: the number pad in Live TV, and in a folder of numbered items.
+static void pad_long_press(void)
+{
+    if (bridge_state() != BRIDGE_FOUND || s_pad_waiting) {
+        return;
+    }
+    const char *id = s_stack[s_depth - 1].id;
+    int known = in_live() ? 1 : s_depth == 1 || at_local() ? 0 : pad_known(id);
+    if (known > 0) {
+        pad_open(id);
+    } else if (!known) {
+        toast("No number pad here", 2000);
+    } else {
+        s_pad_waiting = true;
+        s_pad_wait_t0 = esp_timer_get_time();
+        s_scan_toasted = false;
+        pad_scan_start();
+    }
+}
+
+// Plays channel s_digits: in Live TV the one with id live/<number>, elsewhere the item whose
+// title starts with that number.
 static void jump_task(void *arg)
 {
-    char want[96];
-    snprintf(want, sizeof(want), "live/%s", s_digits);
+    char folder[80], digits[sizeof(s_digits)], want[96], num[PAD_NUM_LEN];
+    strlcpy(folder, s_pad_folder, sizeof(folder));
+    strlcpy(digits, s_digits, sizeof(digits));
+    bool live = !strcmp(folder, "live");
+    snprintf(want, sizeof(want), "live/%s", digits);
     static EXT_RAM_BSS_ATTR cd_entry_t e[20];
     int total = 1, found = -1, at = 0;
     for (int start = 0; start < total && found < 0; start += 20) {
-        int n = bridge_browse("live", start, 20, e, &total);
+        int n = bridge_browse(folder, start, 20, e, &total);
         if (n <= 0) {
             break;
         }
         for (int i = 0; i < n && found < 0; i++) {
-            if (!strcmp(e[i].id, want)) {
+            if (live ? !strcmp(e[i].id, want)
+                     : !e[i].container && title_number(e[i].title, num) && !strcmp(num, digits)) {
                 found = start + i;
                 at = i;
             }
         }
     }
     if (found >= 0) {
-        play_entry("live", found, total, &e[at]);
+        play_entry(folder, found, total, &e[at]);
     } else if (lvgl_port_lock(500)) {
         char text[64];
-        snprintf(text, sizeof(text), "No channel %s", s_digits);
+        snprintf(text, sizeof(text), "No channel %s", digits);
         toast(text, 2500);
         lvgl_port_unlock();
     }
@@ -1605,11 +1816,7 @@ static void on_gesture(gesture_t g, int x, int y)
     case G_DOWN: turn_page(-1); break;
     case G_RIGHT: go_back(); break;
     case G_LONG:
-        if (in_live() && bridge_state() == BRIDGE_FOUND) {
-            s_view = VIEW_PAD;
-            s_digits[0] = '\0';
-            s_result_gen++;
-        }
+        pad_long_press();
         break;
     case G_TAP:
         if (y < HEAD_H) {
@@ -2054,6 +2261,7 @@ static void refresh(lv_timer_t *timer)
         s_bridge_gen = bridge_gen();
         s_depth = 1;
         s_stack[0].page = 0;
+        pad_forget_all();
         if (bridge_state() == BRIDGE_FOUND) {
             request_page();
             profile_toast();
@@ -2070,6 +2278,10 @@ static void refresh(lv_timer_t *timer)
     if (s_shown_gen != s_result_gen) {
         s_shown_gen = s_result_gen;
         rebuild();
+    }
+    if (s_pad_waiting && !s_scan_toasted && now - s_pad_wait_t0 > PAD_CHECK_US) {
+        s_scan_toasted = true;
+        toast("Checking...", 30000);
     }
     if (s_toast_until && now > s_toast_until) {
         lv_obj_add_flag(s_toast, LV_OBJ_FLAG_HIDDEN);
@@ -2317,6 +2529,8 @@ void ui_start(void)
     tv_set_touch_handler(on_tv_touch);
     // stack in PSRAM: it only does network I/O
     xTaskCreateWithCaps(browse_task, "browse", 6144, NULL, 3, NULL, MALLOC_CAP_SPIRAM);
+    s_scans = xQueueCreate(1, sizeof(scan_t));
+    xTaskCreateWithCaps(scan_task, "padscan", 6144, NULL, 2, NULL, MALLOC_CAP_SPIRAM);
     // internal stack: the volume it sets is saved to NVS (flash), which a task with its stack
     // in PSRAM must not do
     xTaskCreate(ctl_task, "tvctl", 8192, NULL, 4, NULL); // a seek browses the bridge first
