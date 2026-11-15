@@ -149,9 +149,8 @@ The setup page then offers **Back to <network>** for the one just forgotten.
   runs the panel's own way up. On the AMOLED-1.8 only the video turns; the menus stay upright.
 - **Keys:** PWR stops playback, or goes back a folder. Hold PWR for 3 s to power off on battery.
   VOL+ and VOL- change the volume. On the AMOLED-1.8: PWR (the lower key) does the same and
-  switches the board on; BOOT (the upper key) also stops playback or goes back, and held it turns
-  the volume down 5 % at a time, back up from 0 to 100 and down again, stopping at 50 % the
-  second time round.
+  switches the board on. BOOT (the upper key): a tap mutes or unmutes; held, it turns the volume
+  down 5 % at a time; tapped and then held, up. Any change of volume unmutes.
 - **Web page and API:** see [below](#web-page-and-api); read-only until Settings → Web control
   says otherwise.
 

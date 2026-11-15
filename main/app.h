@@ -6,6 +6,7 @@
 
 int app_volume(void);
 void app_set_volume(int v); // 0..100, saved in NVS
+void app_mute(bool on);
 
 typedef struct {
     bool connected;

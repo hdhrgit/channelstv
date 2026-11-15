@@ -24,8 +24,8 @@ extern int g_lcd_w, g_lcd_h;
 #define DRAW_LINES 20
 #define SAMPLE_RATE 44100
 
-// KEY_VOL_CYCLE: down in steps, from 0 round to 100 again (the AMOLED-1.8's BOOT held)
-typedef enum { KEY_POWER, KEY_VOL_UP, KEY_VOL_DOWN, KEY_VOL_CYCLE } board_key_t;
+// KEY_MUTE: the AMOLED-1.8's BOOT tapped, which also gives KEY_VOL_UP tapped and held again, KEY_VOL_DOWN held
+typedef enum { KEY_POWER, KEY_VOL_UP, KEY_VOL_DOWN, KEY_MUTE } board_key_t;
 // PWR: SHORT under 0.5 s; past that HOLD ten times a second, then LONG at 3 s, or CANCEL
 // if let go first. Volume keys: SHORT, then REPEAT while held.
 typedef enum { PRESS_SHORT, PRESS_LONG, PRESS_REPEAT, PRESS_HOLD, PRESS_CANCEL } press_t;

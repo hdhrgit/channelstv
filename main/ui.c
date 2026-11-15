@@ -2633,7 +2633,11 @@ void ui_show_volume(int volume)
 {
     if (lvgl_port_lock(100)) {
         lv_obj_set_width(s_toast, LV_SIZE_CONTENT);
-        lv_label_set_text_fmt(s_toast, "%s  %d%%", volume ? LV_SYMBOL_VOLUME_MAX : LV_SYMBOL_MUTE, volume);
+        if (volume < 0) {
+            lv_label_set_text(s_toast, LV_SYMBOL_MUTE "  Muted");
+        } else {
+            lv_label_set_text_fmt(s_toast, "%s  %d%%", volume ? LV_SYMBOL_VOLUME_MAX : LV_SYMBOL_MUTE, volume);
+        }
         lv_obj_remove_flag(s_toast, LV_OBJ_FLAG_HIDDEN);
         s_toast_until = esp_timer_get_time() + 1500000;
         lvgl_port_unlock();

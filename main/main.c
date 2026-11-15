@@ -38,6 +38,7 @@
 static const char *TAG = "channelstv";
 
 static int s_volume = 60;
+static bool s_muted;
 static volatile bool s_connected;
 static volatile bool s_joined; // on the network at least once since this start
 static char s_ip[16] = "";
@@ -60,6 +61,7 @@ static int volume_step(int v)
 void app_set_volume(int v)
 {
     s_volume = volume_step(v);
+    s_muted = false; // a change of volume is heard
     if (board_speaker()) {
         esp_codec_dev_set_out_vol(board_speaker(), s_volume);
     }
@@ -68,6 +70,15 @@ void app_set_volume(int v)
         nvs_set_i32(h, "volume", s_volume);
         nvs_commit(h);
         nvs_close(h);
+    }
+}
+
+// Muted: the speaker at 0 with the volume kept, until a tap again or a change of volume (not saved)
+void app_mute(bool on)
+{
+    s_muted = on;
+    if (board_speaker()) {
+        esp_codec_dev_set_out_vol(board_speaker(), on ? 0 : s_volume);
     }
 }
 
@@ -223,35 +234,10 @@ static void on_key(board_key_t key, press_t press)
         app_set_volume(app_volume() - 5);
         ui_show_volume(app_volume());
         break;
-    case KEY_VOL_CYCLE: {
-        // one hold: down 5 at a time to 0, back up to 100, down again; the second time it gets to
-        // 0 it climbs to 50 and stays there until the key is let go and held again
-        static int64_t last_us;
-        static int zeros, dir = -5;
-        int64_t now = esp_timer_get_time();
-        if (now - last_us > 800000) {
-            zeros = 0; // a new hold (the steps come every 500 ms)
-            dir = -5;
-        }
-        last_us = now;
-        int v = app_volume();
-        if (zeros >= 2 && v >= 50) {
-            break;
-        }
-        if (v + dir < 0 || v + dir > 100) {
-            dir = -dir;
-        }
-        v += dir;
-        if (v == 0) {
-            zeros++;
-            dir = 5;
-        } else if (v == 100) {
-            dir = -5;
-        }
-        app_set_volume(v);
-        ui_show_volume(app_volume());
+    case KEY_MUTE:
+        app_mute(!s_muted);
+        ui_show_volume(s_muted ? -1 : app_volume());
         break;
-    }
     }
 }
 

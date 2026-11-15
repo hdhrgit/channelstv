@@ -11,7 +11,7 @@ void ui_wake(void);
 // Up one folder. Safe from any task.
 void ui_back(void);
 // Flashes the volume over the screen. Safe from any task.
-void ui_show_volume(int volume);
+void ui_show_volume(int volume); // -1: muted
 // Full brightness now, even if idle on battery had dimmed it. Call with the LVGL lock held
 // (playback does, since the dimming timer can't run while it owns the screen).
 void ui_backlight_full(void);

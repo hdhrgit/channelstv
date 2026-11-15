@@ -719,9 +719,10 @@ static volatile int s_held_ms;
 
 // The AMOLED-1.8's PWR key (button 2) belongs to the AXP2101, which tells when it goes down
 // and when it comes up again: it does all the 1.54's PWR does, and switches the board on.
-// BOOT (button 1): a tap goes back as PWR's does, held it turns the volume down a step at a
-// time, round from 0 to 100 again.
+// BOOT (button 1): a tap mutes or unmutes; tapped and held again it turns the volume up a step at a time,
+// held it turns it down. A tap counts once BOOT_TAP_MS have gone by without another press.
 static bool s_pwr_down;
+#define BOOT_TAP_MS 300
 
 // Whether PWR is down now; *tap if it went down and up again since the last look.
 static bool pmu_key(bool *tap)
@@ -750,6 +751,8 @@ static void keys_task(void *arg)
     }
     int held_ms[3] = {0};
     bool long_sent[3] = {0};
+    int boot_wait_ms = 0;     // after a BOOT tap: how long it has been up, while a second press may follow
+    bool boot_second = false; // this BOOT press follows a tap: held, it turns the volume up
     // a key held at boot (BOOT is GPIO0) must be released before it counts
     bool armed[3];
     for (int i = 0; i < nkeys; i++) {
@@ -770,6 +773,34 @@ static void keys_task(void *arg)
                 armed[i] = !down;
                 continue;
             }
+            if (AMOLED && i == 1) {
+                if (down) {
+                    if (!held_ms[i] && boot_wait_ms) {
+                        boot_second = true;
+                        boot_wait_ms = 0;
+                    }
+                    held_ms[i] += 20;
+                    if (held_ms[i] >= 500 && held_ms[i] % REPEAT_MS == 0) {
+                        long_sent[i] = true;
+                        s_key_fn(boot_second ? KEY_VOL_UP : KEY_VOL_DOWN, PRESS_REPEAT);
+                    }
+                } else if (held_ms[i]) {
+                    if (held_ms[i] >= 40 && !long_sent[i]) {
+                        if (boot_second) {
+                            s_key_fn(KEY_VOL_UP, PRESS_SHORT); // two taps: one step up
+                        } else {
+                            boot_wait_ms = 20; // a tap, unless a second press follows
+                        }
+                    }
+                    held_ms[i] = 0;
+                    long_sent[i] = false;
+                    boot_second = false;
+                } else if (boot_wait_ms && (boot_wait_ms += 20) > BOOT_TAP_MS) {
+                    boot_wait_ms = 0;
+                    s_key_fn(KEY_MUTE, PRESS_SHORT);
+                }
+                continue;
+            }
             if (down) {
                 held_ms[i] += 20;
                 if (i == KEY_POWER && held_ms[i] >= LONG_MS && !long_sent[i]) {
@@ -781,13 +812,13 @@ static void keys_task(void *arg)
                     s_key_fn(i, PRESS_HOLD); // ten a second, for the power-off countdown
                 } else if (i != KEY_POWER && held_ms[i] >= 500 && held_ms[i] % REPEAT_MS == 0) {
                     long_sent[i] = true;
-                    s_key_fn(AMOLED ? KEY_VOL_CYCLE : i, PRESS_REPEAT); // volume keys repeat while held
+                    s_key_fn(i, PRESS_REPEAT); // volume keys repeat while held
                 }
             } else {
                 if (i == KEY_POWER && held_ms[i] >= HOLD_MS && !long_sent[i]) {
                     s_key_fn(i, PRESS_CANCEL); // let go before the power-off
                 } else if (held_ms[i] >= 40 && !long_sent[i]) {
-                    s_key_fn(AMOLED && i == 1 ? KEY_POWER : i, PRESS_SHORT);
+                    s_key_fn(i, PRESS_SHORT);
                 }
                 held_ms[i] = 0;
                 long_sent[i] = false;
