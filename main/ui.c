@@ -68,7 +68,7 @@ static volatile int64_t s_loading_us;
 #define BACK_W   PX(60)                     // the heading's left end goes back
 #define DEPTH    8                          // folders deep
 #define SWIPE_PX PX(40)
-#define SWIPE_MS 600
+#define SWIPE_MS 1000
 #define TAP_PX   PX(20)
 #define OVERLAY_MS 4000                     // the playback controls hide after this
 #define SEEK_STEP_S  30                     // a tap on the seek keys ...
@@ -159,6 +159,7 @@ static int s_t_x0, s_t_y0, s_t_x, s_t_y;
 static int64_t s_t_t0;
 static int s_swipe_dy, s_swipe_ms; // the last vertical swipe, for the fling (0: from the web API)
 static bool s_t_long;   // a long press was taken: its release is nothing more
+static bool s_t_stopped; // the touch stopped a slide: no tap
 static int s_pressed_row = -1;
 
 static char s_digits[12]; // typed on the number pad
@@ -549,19 +550,19 @@ static lv_timer_t *s_fling_timer;
 static int s_fling_from, s_fling_to, s_fling_at, s_fling_pages;
 static int64_t s_fling_t0, s_fling_us;
 
-// Pages a vertical swipe of dy px in ms moves: one for a slow one; past 2 screens a second, the
-// square of the speed over two (5 screens a second: 12 pages)
+// Pages a vertical swipe of dy px in ms moves: one for an ordinary swipe, up to 3 screens a second (a
+// third of the screen in a tenth of a second); past that one more for each step of the square of the
+// speed over 3 (4 screens a second: 2 pages, 5: 5, 6: 10)
 static int ui_fling_pages(int dy, int ms, int screen_h)
 {
     if (ms <= 0 || screen_h <= 0) {
         return 1;
     }
     float sps = (float)abs(dy) / screen_h * 1000.0f / ms;
-    if (sps < 2.0f) {
+    if (sps < 3.0f) {
         return 1;
     }
-    int n = (int)(sps * sps / 2 + 0.5f);
-    return n < 1 ? 1 : n;
+    return 1 + (int)((sps - 3) * (sps - 3) + 0.5f);
 }
 
 static void fling_end(void)
@@ -1651,6 +1652,11 @@ static void on_touch(lv_event_t *e)
         s_t_y0 = s_t_y = p.y;
         s_t_t0 = esp_timer_get_time();
         s_t_long = false;
+        s_t_stopped = s_fling_timer != NULL;
+        if (s_t_stopped) {
+            fling_end(); // a finger on the screen stops a slide where it is; lifted, it opens nothing
+            break;
+        }
         row_highlight(p.y >= HEAD_H ? (p.y - HEAD_H) / ROW_H : -1);
         break;
     case LV_EVENT_PRESSING:
@@ -1661,7 +1667,7 @@ static void on_touch(lv_event_t *e)
         }
         break;
     case LV_EVENT_LONG_PRESSED:
-        if (abs(s_t_x - s_t_x0) < TAP_PX && abs(s_t_y - s_t_y0) < TAP_PX) {
+        if (!s_t_stopped && abs(s_t_x - s_t_x0) < TAP_PX && abs(s_t_y - s_t_y0) < TAP_PX) {
             s_t_long = true;
             row_highlight(-1);
             on_gesture(G_LONG, s_t_x0, s_t_y0);
@@ -1678,7 +1684,7 @@ static void on_touch(lv_event_t *e)
             s_swipe_dy = dy;
             s_swipe_ms = ms;
             on_gesture(adx > ady ? (dx > 0 ? G_RIGHT : G_LEFT) : (dy > 0 ? G_DOWN : G_UP), s_t_x0, s_t_y0);
-        } else if (adx < TAP_PX && ady < TAP_PX) {
+        } else if (adx < TAP_PX && ady < TAP_PX && !s_t_stopped) {
             on_gesture(G_TAP, s_t_x0, s_t_y0);
         }
         break;

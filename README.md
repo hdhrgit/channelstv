@@ -103,7 +103,7 @@ The setup page then offers **Back to <network>** for the one just forgotten.
   the page number is at the top right. The last page of a folder shows its last full page of rows.
   - Swipe up for the next page, down for the previous one; swipe right (or tap the arrow at the
     top left) to go back. A quick flick slides through many pages, with the page number shown
-    large, and stops on the page it lands on; the faster the flick, the further. A tap stops it.
+    large, and stops on the page it lands on; the faster the flick, the further. A touch stops it there.
   - Tap a folder to open it, a channel or a recording to play it. "Tuning... N s" covers the
     screen until the first picture (the DVR can take 15-30 s to start a channel; a tap there
     cancels).
