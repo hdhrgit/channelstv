@@ -514,9 +514,11 @@ h264dec_t *h264dec_open(void)
         free(d);
         return NULL;
     }
-    // below the drawer (10) and the sound (9) on core 1; stack in PSRAM, it only calls memcpy
+    // below the drawer (10) and the sound (9), above the decoder (7), on either core: on core 1 alone it took a
+    // quarter of it at 448x368 24 fps, which the drawing needs; stack in PSRAM, it only calls memcpy
     if (d && vj_decoder_set_hold(d->dec, true) &&
-        xTaskCreatePinnedToCoreWithCaps(copier_task, "fcopy", 2048, d, 8, &d->copier, 1, MALLOC_CAP_SPIRAM) != pdPASS) {
+        xTaskCreatePinnedToCoreWithCaps(copier_task, "fcopy", 2048, d, 8, &d->copier, tskNO_AFFINITY,
+                                        MALLOC_CAP_SPIRAM) != pdPASS) {
         d->copier = NULL;
     }
     return d;
