@@ -157,6 +157,21 @@ static uint16_t *s_strip[2];
 static DMA_ATTR uint16_t s_sync_px[2]; // black: a one-pixel window command at the panel's corner
 static char s_draw_err[64];
 
+#if CONFIG_CHANNELSTV_STAGE_TIMING
+// Microseconds per stage since the last perf reset: waiting for the refresh, converting (with scaling),
+// sending to the panel, the whole frame; and the frames drawn
+static int64_t s_st_wait, s_st_conv, s_st_push, s_st_total;
+static int s_st_frames;
+#define STAGE(acc, ...)                               \
+    do {                                              \
+        int64_t st0_ = esp_timer_get_time();          \
+        __VA_ARGS__;                                  \
+        acc += esp_timer_get_time() - st0_;           \
+    } while (0)
+#else
+#define STAGE(acc, ...) __VA_ARGS__
+#endif
+
 // The panel's SPI DMA can't read the PSRAM frame reliably (only the top of it arrived), so
 // each frame goes out in strips copied to internal RAM. Two strips take turns: the next
 // draw's window commands wait for the previous strip's pixels to finish sending.
@@ -172,22 +187,37 @@ static void draw_frame(esp_lcd_panel_handle_t panel, uint16_t *strip[2], const u
         H = H > LCD_W ? LCD_W & ~1 : H;
         int x = ((LCD_W - H) / 2) & ~1;
         const uint8_t *pu = frame + w * h, *pv = pu + (w / 2) * (h / 2);
-        board_wait_scan(0);
+        STAGE(s_st_wait, board_wait_scan(0));
         int64_t t0 = esp_timer_get_time(), conv = 0;
-        for (int row = 0, s = 0; row < W; row += STRIP_LINES, s ^= 1) {
-            int lines = W - row < STRIP_LINES ? W - row : STRIP_LINES;
-            int64_t c0 = esp_timer_get_time();
-            if (W == w && H == h) {
-                // 1:1 (a picture made for the panel turned): a plain quarter turn, 2x2 blocks sharing
-                // their chroma, no stretching tables
-                h264_i420_turned_to_rgb565be(frame, pu, pv, w, h, rot, row, lines, strip[s]);
-            } else {
-                h264_i420_scaled_turned_to_rgb565be(frame, pu, pv, w, h, W, H, rot, row, lines, strip[s]);
-            }
-            conv += esp_timer_get_time() - c0;
-            esp_err_t err = esp_lcd_panel_draw_bitmap(panel, x, row, x + H, row + lines, strip[s]);
-            if (err != ESP_OK && !s_draw_err[0]) {
-                snprintf(s_draw_err, sizeof(s_draw_err), "draw row %d: %s", row, esp_err_to_name(err));
+        // in tiles of 64 panel rows (source columns): at 1:1 a cache line of luma each, used whole. The panel
+        // sometimes gets the first column of a window wrong (a dotted line down the picture where a tile starts),
+        // so each window starts two columns before its tile and a row of tiles goes right to left: the tile on
+        // the left writes those columns again. The leftmost one starts in the black border, or, with the picture
+        // across the whole panel, in the columns the panel doesn't show
+        int room = LCD_W * STRIP_LINES, s = 0;
+        for (int row = 0; row < W; row += 64) {
+            int lines = W - row < 64 ? W - row : 64;
+            int cn = h264_sideways_tile_cols(w, h, W, H, lines, room - 4 * lines);
+            for (int c0 = (H - 1) / cn * cn; c0 >= 0; c0 -= cn, s ^= 1) {
+                int n = H - c0 < cn ? H - c0 : cn;
+                int a = c0 ? c0 - 2 : 0, m = c0 + n - a, lead = c0 ? 0 : x >= 2 ? 2 : board_lcd_hidden_left() >= 4 ? 4 : 0;
+                int64_t c1 = esp_timer_get_time();
+                STAGE(s_st_conv, h264_i420_sideways_tile(frame, pu, pv, w, h, W, H, rot, row, lines, a, m, strip[s],
+                                                         room - lines * m));
+                if (lead) {
+                    for (int r = lines - 1; r >= 0; r--) {
+                        uint16_t *o = strip[s] + r * (m + lead);
+                        memmove(o + lead, strip[s] + r * m, m * 2);
+                        memset(o, 0, lead * 2);
+                    }
+                }
+                conv += esp_timer_get_time() - c1;
+                esp_err_t err;
+                STAGE(s_st_push, err = esp_lcd_panel_draw_bitmap(panel, x + a - lead, row, x + c0 + n, row + lines,
+                                                                 strip[s]));
+                if (err != ESP_OK && !s_draw_err[0]) {
+                    snprintf(s_draw_err, sizeof(s_draw_err), "draw row %d: %s", row, esp_err_to_name(err));
+                }
             }
         }
         s_frame_conv_ms = conv / 1000.0f;
@@ -202,11 +232,12 @@ static void draw_frame(esp_lcd_panel_handle_t panel, uint16_t *strip[2], const u
         H = H > LCD_H ? LCD_H & ~1 : H;
         int x = ((LCD_W - W) / 2) & ~1, y = ((LCD_H - H) / 2) & ~1;
         const uint8_t *pu = frame + w * h, *pv = pu + (w / 2) * (h / 2);
-        board_wait_scan(y);
+        STAGE(s_st_wait, board_wait_scan(y));
         for (int row = 0, s = 0; row < H; row += STRIP_LINES, s ^= 1) {
             int lines = H - row < STRIP_LINES ? H - row : STRIP_LINES;
-            h264_i420_scaled_to_rgb565be(frame, pu, pv, w, h, W, H, row, lines, strip[s]);
-            esp_err_t err = esp_lcd_panel_draw_bitmap(panel, x, y + row, x + W, y + row + lines, strip[s]);
+            STAGE(s_st_conv, h264_i420_scaled_to_rgb565be(frame, pu, pv, w, h, W, H, row, lines, strip[s]));
+            esp_err_t err;
+            STAGE(s_st_push, err = esp_lcd_panel_draw_bitmap(panel, x, y + row, x + W, y + row + lines, strip[s]));
             if (err != ESP_OK && !s_draw_err[0]) {
                 snprintf(s_draw_err, sizeof(s_draw_err), "draw row %d: %s", row, esp_err_to_name(err));
             }
@@ -221,16 +252,17 @@ static void draw_frame(esp_lcd_panel_handle_t panel, uint16_t *strip[2], const u
     int pw = rot & 1 ? h : w - 2 * cx, ph = rot & 1 ? w : h;
     int x = (LCD_W - pw) / 2, y = (LCD_H - ph) / 2;
     const uint8_t *pu = frame + w * h, *pv = pu + (w / 2) * (h / 2);
-    board_wait_scan(y); // start just behind the panel's refresh
+    STAGE(s_st_wait, board_wait_scan(y)); // start just behind the panel's refresh
     for (int row = 0, s = 0; row < ph; row += STRIP_LINES, s ^= 1) { // STRIP_LINES is even
         int lines = ph - row < STRIP_LINES ? ph - row : STRIP_LINES;
         if (rot) {
-            h264_i420_turned_to_rgb565be(frame, pu, pv, w, h, rot, row, lines, strip[s]);
+            STAGE(s_st_conv, h264_i420_turned_to_rgb565be(frame, pu, pv, w, h, rot, row, lines, strip[s]));
         } else {
-            h264_i420_rows_to_rgb565be(frame + row * w + cx, pu + row / 2 * (w / 2) + cx / 2, pv + row / 2 * (w / 2) + cx / 2,
-                                       w, pw, lines, strip[s]);
+            STAGE(s_st_conv, h264_i420_rows_to_rgb565be(frame + row * w + cx, pu + row / 2 * (w / 2) + cx / 2, pv + row / 2 * (w / 2) + cx / 2,
+                                       w, pw, lines, strip[s]));
         }
-        esp_err_t err = esp_lcd_panel_draw_bitmap(panel, x, y + row, x + pw, y + row + lines, strip[s]);
+        esp_err_t err;
+        STAGE(s_st_push, err = esp_lcd_panel_draw_bitmap(panel, x, y + row, x + pw, y + row + lines, strip[s]));
         if (err != ESP_OK && !s_draw_err[0]) {
             snprintf(s_draw_err, sizeof(s_draw_err), "draw row %d: %s", row, esp_err_to_name(err));
         }
@@ -389,7 +421,10 @@ static void draw_task(void *arg)
             s_drstate = "drawing";
             h264dec_ready(s_fb[fr.buf]);
             if (!overlay_on) {
-                draw_frame(panel, s_strip, s_fb[fr.buf], fr.w, fr.h, board_video_rotation());
+                STAGE(s_st_total, draw_frame(panel, s_strip, s_fb[fr.buf], fr.w, fr.h, board_video_rotation()));
+#if CONFIG_CHANNELSTV_STAGE_TIMING
+                s_st_frames++;
+#endif
             }
             int64_t b = esp_timer_get_time();
             draw_us += b - a;
@@ -568,6 +603,11 @@ void tv_perf_reset(int hashing)
     if (hashing >= 0) {
         s_perf_hashing = hashing;
     }
+#if CONFIG_CHANNELSTV_STAGE_TIMING
+    s_st_wait = s_st_conv = s_st_push = s_st_total = 0;
+    s_st_frames = 0;
+    h264_scale_us = 0;
+#endif
     s_perf_t0 = esp_timer_get_time();
     s_perf_idle0[0] = idle_us(0);
     s_perf_idle0[1] = idle_us(1);
@@ -616,6 +656,17 @@ void tv_perf_json(char *out, size_t len)
              (unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL),
              (unsigned)heap_caps_get_free_size(MALLOC_CAP_SPIRAM), (unsigned)heap_caps_get_minimum_free_size(MALLOC_CAP_SPIRAM),
              (unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_SPIRAM), s_hash_n);
+#if CONFIG_CHANNELSTV_STAGE_TIMING
+    size_t o = strlen(out);
+    int fn = s_st_frames ? s_st_frames : 1;
+    if (o > 0 && o + 160 < len) {
+        snprintf(out + o - 1, len - o + 1,
+                 ",\"stages\":{\"frames\":%d,\"wait_us\":%lld,\"convert_us\":%lld,\"scale_us\":%lld,\"push_us\":%lld,"
+                 "\"total_us\":%lld}}",
+                 s_st_frames, s_st_wait / fn, (s_st_conv - h264_scale_us) / fn, h264_scale_us / fn, s_st_push / fn,
+                 s_st_total / fn);
+    }
+#endif
 }
 
 // "pts hash" lines from index from, at most len bytes

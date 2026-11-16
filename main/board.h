@@ -20,7 +20,7 @@ extern int g_lcd_w, g_lcd_h;
 #define LCD_H g_lcd_h
 #define LCD_MAX_W 368 // the widest of the boards' panels
 // Rows in each of LVGL's two draw buffers (internal DMA RAM; playback borrows them as its strips):
-// 20 (448 rows of the AMOLED in 23 strips, the last one 8): fewer strips keep the sideways picture fast
+// 20 (448 rows of the AMOLED in 23 strips, the last one 8); the sideways picture goes out in tiles of the same size
 #define DRAW_LINES 20
 #define SAMPLE_RATE 44100
 
@@ -75,6 +75,8 @@ esp_codec_dev_handle_t board_speaker(void);
 void board_amp(bool on);
 esp_lcd_panel_io_handle_t board_lcd_io(void);
 esp_lcd_panel_handle_t board_lcd_panel(void);
+// Columns of panel memory left of column 0 that the panel doesn't show (16 on the AMOLED-1.8 V2, else 0)
+int board_lcd_hidden_left(void);
 esp_lcd_touch_handle_t board_touch(void);
 void board_backlight(int percent);
 int board_backlight_percent(void);

@@ -90,6 +90,7 @@ static const char *TAG = "board";
 static i2c_master_bus_handle_t s_i2c;
 static esp_codec_dev_handle_t s_spk;
 static esp_lcd_panel_io_handle_t s_lcd_io;
+static int s_lcd_gap; // esp_lcd_panel_set_gap's x
 static esp_lcd_panel_handle_t s_panel;
 static esp_lcd_touch_handle_t s_touch;
 static temperature_sensor_handle_t s_temp;
@@ -532,7 +533,8 @@ static void amoled_lcd_init(bool v2)
     ESP_ERROR_CHECK(esp_lcd_new_panel_co5300(s_lcd_io, &panel, &s_panel));
     esp_lcd_panel_reset(s_panel);
     esp_lcd_panel_init(s_panel);
-    esp_lcd_panel_set_gap(s_panel, v2 ? A_GAP_V2 : 0, 0);
+    s_lcd_gap = v2 ? A_GAP_V2 : 0;
+    esp_lcd_panel_set_gap(s_panel, s_lcd_gap, 0);
     // RDDID, read back on one line
     uint8_t id[3] = {0};
     if (esp_lcd_panel_io_rx_param(s_lcd_io, 0x03 << 24 | 0x04 << 8, id, 3) == ESP_OK) {
@@ -672,6 +674,11 @@ void board_amp(bool on)
 esp_lcd_panel_io_handle_t board_lcd_io(void)
 {
     return s_lcd_io;
+}
+
+int board_lcd_hidden_left(void)
+{
+    return s_lcd_gap;
 }
 
 esp_lcd_panel_handle_t board_lcd_panel(void)

@@ -470,6 +470,16 @@ static esp_err_t perf(httpd_req_t *req)
     return err;
 }
 
+#if CONFIG_CHANNELSTV_STAGE_TIMING
+static esp_err_t convcheck(httpd_req_t *req)
+{
+    char buf[400];
+    h264_convcheck(buf, sizeof(buf), query_int(req, "w", 448), query_int(req, "h", 368), query_int(req, "ow", 448),
+                   query_int(req, "oh", 368), query_int(req, "rot", 1));
+    return send_raw_json(req, buf);
+}
+#endif
+
 static esp_err_t perf_hashes(httpd_req_t *req)
 {
     char *buf = heap_caps_malloc(32768, MALLOC_CAP_SPIRAM);
@@ -509,15 +519,26 @@ static esp_err_t screen(httpd_req_t *req)
             }
         }
     } else if (yuv) {
-        uint16_t line[LCD_W * 2];
+        // two of the frame's rows at a time, upright; a frame bigger than the panel (made for it sideways, 448
+        // wide at 1x) shows its middle
+        uint16_t *line = heap_caps_malloc(w * 2 * sizeof(uint16_t), MALLOC_CAP_SPIRAM);
+        if (!line) {
+            heap_caps_free(bmp);
+            return httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "memory");
+        }
         int x0 = (LCD_W - w) / 2, y0 = (LCD_H - h) / 2;
+        int xa = x0 < 0 ? -x0 : 0, xb = x0 + w > LCD_W ? LCD_W - x0 : w;
         const uint8_t *pu = yuv + w * h, *pv = pu + (w / 2) * (h / 2);
         for (int y = 0; y < h; y += 2) {
             int n = h - y < 2 ? h - y : 2;
             h264_i420_rows_to_rgb565be(yuv + y * w, pu + y / 2 * (w / 2), pv + y / 2 * (w / 2), w, w, n, line);
             for (int k = 0; k < n; k++) {
-                uint8_t *o = px + (LCD_H - 1 - (y0 + y + k)) * row + x0 * 3;
-                for (int x = 0; x < w; x++, o += 3) {
+                int py = y0 + y + k;
+                if (py < 0 || py >= LCD_H) {
+                    continue;
+                }
+                uint8_t *o = px + (LCD_H - 1 - py) * row + (x0 + xa) * 3;
+                for (int x = xa; x < xb; x++, o += 3) {
                     uint16_t c = line[k * w + x];
                     c = c >> 8 | c << 8; // the panel's byte order back to RGB565
                     o[0] = (c & 0x1f) << 3;
@@ -526,9 +547,12 @@ static esp_err_t screen(httpd_req_t *req)
                 }
             }
         }
-    } else if (tv_playing() && tv_first_picture_ms()) {
+        heap_caps_free(line);
+    } else if (tv_playing()) {
+        // playback holds LVGL, or a start is taking it over: a snapshot of the tuning screen then restarted
+        // the board (interrupt watchdog)
         heap_caps_free(bmp);
-        return httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "no frame"); // playback holds LVGL
+        return httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, tv_first_picture_ms() ? "no frame" : "starting");
     } else {
         if (!lvgl_port_lock(1000)) {
             heap_caps_free(bmp);
@@ -757,7 +781,11 @@ void web_apply(void)
     cfg.stack_size = 8192;
     // above the H.264 decoder (7): a board that can't keep up with a stream still answers
     cfg.task_priority = 8;
+#if CONFIG_CHANNELSTV_STAGE_TIMING
+    cfg.max_uri_handlers = 28;
+#else
     cfg.max_uri_handlers = 27;
+#endif
     cfg.recv_wait_timeout = 15;
     // a browser keeps several connections open per page: close the idlest instead of refusing
     cfg.lru_purge_enable = true;
@@ -791,6 +819,9 @@ void web_apply(void)
         {"/api/tv", HTTP_GET, {tv, FULL}},
         {"/api/perf", HTTP_GET, {perf, FULL}},
         {"/api/perf/hashes", HTTP_GET, {perf_hashes, FULL}},
+#if CONFIG_CHANNELSTV_STAGE_TIMING
+        {"/api/convcheck", HTTP_GET, {convcheck, FULL}},
+#endif
         {"/api/touch", HTTP_GET, {touch, FULL}},
         {"/api/screen", HTTP_GET, {screen, FULL}},
 #if CONFIG_CHANNELSTV_WIFI_OUTAGE_TEST
