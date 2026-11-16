@@ -49,9 +49,6 @@ void h264_i420_sideways_tile(const uint8_t *py, const uint8_t *pu, const uint8_t
                              int r0, int rn, int c0, int cn, uint16_t *out, int room);
 // The widest tile (even) for rn rows that, with its source block, fits in room pixels
 int h264_sideways_tile_cols(int w, int h, int W, int H, int rn, int room);
-// Rows [first, first + lines) of the w x h picture scaled up to W x H upright (nearest pixel)
-void h264_i420_scaled_to_rgb565be(const uint8_t *py, const uint8_t *pu, const uint8_t *pv, int w, int h, int W, int H,
-                                  int first, int lines, uint16_t *out);
 
 #if CONFIG_CHANNELSTV_STAGE_TIMING
 // Microseconds the scaling functions spent picking pixels (not converting), for the stage timings

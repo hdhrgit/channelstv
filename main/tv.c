@@ -224,26 +224,6 @@ static void draw_frame(esp_lcd_panel_handle_t panel, uint16_t *strip[2], const u
         s_frame_draw_ms = (esp_timer_get_time() - t0) / 1000.0f;
         return;
     }
-    if (!(rot & 1) && bridge_scale() > 10 && w <= LCD_W) {
-        // upright, asked for smaller (Upscaling): back up to its size times the setting
-        int W = w * bridge_scale() / 10 & ~1;
-        W = W > LCD_W ? LCD_W : W;
-        int H = (W * h / w) & ~1;
-        H = H > LCD_H ? LCD_H & ~1 : H;
-        int x = ((LCD_W - W) / 2) & ~1, y = ((LCD_H - H) / 2) & ~1;
-        const uint8_t *pu = frame + w * h, *pv = pu + (w / 2) * (h / 2);
-        STAGE(s_st_wait, board_wait_scan(y));
-        for (int row = 0, s = 0; row < H; row += STRIP_LINES, s ^= 1) {
-            int lines = H - row < STRIP_LINES ? H - row : STRIP_LINES;
-            STAGE(s_st_conv, h264_i420_scaled_to_rgb565be(frame, pu, pv, w, h, W, H, row, lines, strip[s]));
-            esp_err_t err;
-            STAGE(s_st_push, err = esp_lcd_panel_draw_bitmap(panel, x, y + row, x + W, y + row + lines, strip[s]));
-            if (err != ESP_OK && !s_draw_err[0]) {
-                snprintf(s_draw_err, sizeof(s_draw_err), "draw row %d: %s", row, esp_err_to_name(err));
-            }
-        }
-        return;
-    }
     int cx = 0; // a picture wider than the panel (made for it turned sideways): its middle, upright
     if (w > LCD_W) {
         rot = 0;

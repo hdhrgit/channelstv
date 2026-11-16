@@ -132,9 +132,8 @@ The setup page then offers **Back to <network>** for the one just forgotten.
 - **Settings:** Touch test (tap five dots; the board works out how the touch panel lines up with
   the screen and keeps it), Picture (16:9 or the centre 4:3; on the AMOLED-1.8 also Fill screen,
   the middle of the picture cropped to the screen's shape), on the AMOLED-1.8 Frame rate (24, 20
-  or 15 fps, default 24, 20 on Fill screen: what the board asks the bridge for; the 1.54 always asks for 24) and
-  Upscaling (off, 1.5x or 2x: a smaller picture from the bridge, scaled up, for a smoother frame
-  rate on a busy channel), Bitrate (Auto, or 250, 400, 550, 700, 1000 or 1500 kbps; Auto asks for 250 to 700
+  or 15 fps, default 24, 20 on Fill screen: what the board asks the bridge for; the 1.54 always asks for 24),
+  Bitrate (Auto, or 250, 400, 550, 700, 1000 or 1500 kbps; Auto asks for 250 to 700
   by the picture's size and frame rate; over 700 kbps the board may drop frames or stutter, and the row shows ⚠),
   Rotation, Backlight
   (20 to 100 %), Dim and Off (on battery, after 30 s or 1, 5 or 10 minutes untouched, and after
@@ -180,8 +179,8 @@ which works the same way. While the setup hotspot is open, its page and `/api/wi
 whatever Web control says.
 
 With Web control **full**, the page shows the status, browses the bridge's folders, searches
-titles and plays from them, sets the bridge address, the picture, the frame rate and upscaling
-(AMOLED-1.8), the rotation, the
+titles and plays from them, sets the bridge address, the picture, the frame rate (AMOLED-1.8),
+the bitrate, the rotation, the
 backlight, when the screen dims and goes off on battery, and the volume, and shows a picture of
 the screen. The API (all `GET` unless shown):
 
@@ -191,7 +190,7 @@ the screen. The API (all `GET` unless shown):
 | `/api/status` | the board, Wi-Fi, battery, memory, the bridge, playback, Web control and OTA | yes |
 | `/chips`, `/api/chips` | the board and its chips, their IDs, and what the motion sensor, battery and touch read now | yes |
 | `POST /api/ota` | an app image (`channelstv-<version>-ota.bin`) to flash and restart into | its own switch |
-| `/api/settings?bridge=host[:port]&picture=16x9\|4x3\|full&fps=15\|20\|24&scale=1\|1.5\|2&bitrate=auto\|250\|400\|550\|700\|1000\|1500&volume=0..100&brightness=20..100&dim=30s\|1\|5\|10\|never&off=1\|5\|10\|30\|never` | sets any of them; `bridge=` empty goes back to finding it. `picture=full`, `fps` and `scale` are the AMOLED-1.8's; the 1.54 neither takes nor reports `fps` and `scale` | |
+| `/api/settings?bridge=host[:port]&picture=16x9\|4x3\|full&fps=15\|20\|24&bitrate=auto\|250\|400\|550\|700\|1000\|1500&volume=0..100&brightness=20..100&dim=30s\|1\|5\|10\|never&off=1\|5\|10\|30\|never` | sets any of them; `bridge=` empty goes back to finding it. `picture=full` and `fps` are the AMOLED-1.8's; the 1.54 neither takes nor reports `fps` | |
 | `/api/settings?size=WxH&tesync=0\|1` | until the next start: another picture size to ask the bridge for (`0x0`: the board's own), and the AMOLED-1.8's frame timing | |
 | `/api/rescan` | looks for the bridge again | |
 | `/api/browse?id=ID&start=N` | a page of a folder (`0` is the top) | |

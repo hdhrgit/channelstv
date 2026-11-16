@@ -51,11 +51,6 @@ void bridge_set_size(int w, int h);
 // set, 24 on a 240x240 panel and 15 on a larger one, where decoding has more to do.
 int bridge_fps(void);
 void bridge_set_fps(int fps);
-// Upscaling on the larger panel, in tenths: 10 (none), 15 or 20. The board asks the bridge for
-// its picture size divided by it (the width a multiple of 8) and scales the picture back up.
-// Saved in NVS; always 10 on the 240x240 panel.
-int bridge_scale(void);
-void bridge_set_scale(int tenths);
 // The video bitrate the board asks the bridge for (vb=): 0 is Auto (by the picture's pixels a second, 250 to
 // 700 kbps), or 250, 400, 550, 700, 1000 or 1500 kbps as it is (at most what the bridge takes). Saved in NVS.
 int bridge_kbps(void);

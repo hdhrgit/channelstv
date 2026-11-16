@@ -41,7 +41,6 @@ static bool s_full; // the picture fills the larger panel: its middle, cropped t
 static int s_fps; // set by the user, else 0: fps_default()
 static int s_kbps;              // Bitrate: 0 (Auto) or kbps
 static int s_kbps_max = 1500;   // the most the bridge takes (its /api/caps), where known
-static int s_scale = 10;
 static volatile unsigned s_gen;
 static volatile bool s_rescan = true;
 // The bridge's client profile the board asks for, and the overrides it adds for the centre 4:3 on
@@ -127,11 +126,6 @@ void bridge_size(int *w, int *h)
     int sw = side ? LCD_H : LCD_W, sh = side ? LCD_W : LCD_H;
     *w = s_pic_w ? s_pic_w : big ? (s_4x3 ? 320 : sw) : 0;
     *h = s_pic_h ? s_pic_h : big ? (s_4x3 ? 240 : sh) : 0;
-    if (!s_pic_w && big && bridge_scale() > 10) {
-        int sw = (*w * 10 / bridge_scale()) & ~7; // a multiple of 8 for the PIE path
-        *h = (*h * sw / *w) & ~1;
-        *w = sw;
-    }
 }
 
 // ---------------------------------------------------------------- HTTP
@@ -612,19 +606,6 @@ static void bridge_task(void *arg)
     }
 }
 
-int bridge_scale(void)
-{
-    return LCD_W * LCD_H > 240 * 240 ? s_scale : 10;
-}
-
-void bridge_set_scale(int tenths)
-{
-    s_scale = tenths == 15 || tenths == 20 ? tenths : 10;
-    char v[4];
-    snprintf(v, sizeof(v), "%d", s_scale);
-    nvs_put("scale", v);
-}
-
 // Without a frame rate set: 24, but 20 for Fill screen on the larger panel (its 448x368 holds 24 only at
 // the lowest bitrates)
 static int fps_default(void)
@@ -675,8 +656,6 @@ void bridge_start(bool (*online)(void))
     nvs_str("picture", p, sizeof(p));
     s_4x3 = !strcmp(p, "4x3");
     s_full = !strcmp(p, "full") && LCD_W * LCD_H > 240 * 240;
-    nvs_str("scale", p, sizeof(p));
-    s_scale = atoi(p) == 15 || atoi(p) == 20 ? atoi(p) : 10;
     nvs_str("fps", p, sizeof(p));
     int fps = atoi(p); // none set, or an earlier "0" (the bridge's own rate): the default, by the picture
     s_fps = LCD_W * LCD_H > 240 * 240 && (fps == 15 || fps == 20 || fps == 24) ? fps : 0;

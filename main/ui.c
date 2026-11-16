@@ -284,16 +284,16 @@ static bool settings_under_note(void)
     return s_note && !lv_obj_has_flag(s_note, LV_OBJ_FLAG_HIDDEN) && !lv_obj_has_flag(s_row[ROWS - 1], LV_OBJ_FLAG_HIDDEN);
 }
 
-enum { SET_TOUCH, SET_PICTURE, SET_FPS, SET_SCALE, SET_BITRATE, SET_ROTATION, SET_BRIGHT, SET_DIM, SET_OFF, SET_OTA, SET_WEB, SET_FIND, SET_VERSION,
+enum { SET_TOUCH, SET_PICTURE, SET_FPS, SET_BITRATE, SET_ROTATION, SET_BRIGHT, SET_DIM, SET_OFF, SET_OTA, SET_WEB, SET_FIND, SET_VERSION,
        SET_N };
 
-// The Settings rows this board shows, in order: Frame rate and Upscaling only on the larger panel
+// The Settings rows this board shows, in order: Frame rate only on the larger panel
 // (the 1.54 always plays 24 fps, 1:1)
 static int set_rows(int *ids)
 {
     int n = 0;
     for (int k = 0; k < SET_N; k++) {
-        if ((k != SET_FPS && k != SET_SCALE) || LCD_W * LCD_H > 240 * 240) {
+        if (k != SET_FPS || LCD_W * LCD_H > 240 * 240) {
             ids[n++] = k;
         }
     }
@@ -312,7 +312,7 @@ static int page_first(int page, int total)
 // Settings, a page at a time like any folder.
 static void settings_rows(void)
 {
-    static const char *const titles[SET_N] = {"Touch test", "Picture", "Frame rate", "Upscaling", "Bitrate", "Rotation", "Backlight", "Dim", "Off",
+    static const char *const titles[SET_N] = {"Touch test", "Picture", "Frame rate", "Bitrate", "Rotation", "Backlight", "Dim", "Off",
                                               "OTA updates", "Web control", "Find the bridge again", "Version"};
     static const char *const web[] = {"full", "read-only", "off"};
     static const char *const rotations[] = {"auto", "0\u00b0", "90\u00b0", "180\u00b0", "270\u00b0"};
@@ -329,9 +329,6 @@ static void settings_rows(void)
             snprintf(e->title, sizeof(e->title), "Picture: %s", !strcmp(p, "4x3") ? "4:3 centre" : !strcmp(p, "full") ? "fill screen" : "16:9");
         } else if (k == SET_FPS) {
             snprintf(e->title, sizeof(e->title), "Frame rate: %d fps", bridge_fps());
-        } else if (k == SET_SCALE) {
-            static const char *const scales[] = {"off", "1.5x", "2x"};
-            snprintf(e->title, sizeof(e->title), "Upscaling: %s", scales[(bridge_scale() - 10) / 5]);
         } else if (k == SET_BITRATE) {
             int kbps = bridge_kbps();
             if (!kbps) {
@@ -1713,10 +1710,6 @@ static void activate_row(int i)
             break;
         case SET_FPS: // 24, 15, 20, 24, ...
             bridge_set_fps(bridge_fps() == 24 ? 15 : bridge_fps() == 15 ? 20 : 24);
-            settings_rows();
-            break;
-        case SET_SCALE: // off, 1.5x, 2x, off, ...
-            bridge_set_scale(bridge_scale() == 10 ? 15 : bridge_scale() == 15 ? 20 : 10);
             settings_rows();
             break;
         case SET_BITRATE: { // auto, 250, 400, 550, 700, 1000, 1500, auto, ...

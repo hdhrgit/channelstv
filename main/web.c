@@ -253,9 +253,6 @@ static esp_err_t settings(httpd_req_t *req)
     if (query_str(req, "bitrate", v, sizeof(v))) {
         bridge_set_kbps(atoi(v)); // "auto" (or anything else): Auto
     }
-    if (query_str(req, "scale", v, sizeof(v))) {
-        bridge_set_scale((int)(atof(v) * 10 + 0.5)); // 1, 1.5 or 2
-    }
     int vol = query_int(req, "volume", -1);
     if (vol >= 0) {
         app_set_volume(vol);
@@ -283,7 +280,6 @@ static esp_err_t settings(httpd_req_t *req)
     cJSON_AddNumberToObject(root, "te_period_us", board_te_period_us());
     if (LCD_W * LCD_H > 240 * 240) { // the 1.54 has neither: always 24 fps, 1:1
         cJSON_AddNumberToObject(root, "fps", bridge_fps());
-        cJSON_AddNumberToObject(root, "scale", bridge_scale() / 10.0);
     }
     if (bridge_kbps()) {
         cJSON_AddNumberToObject(root, "bitrate", bridge_kbps());

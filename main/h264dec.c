@@ -325,56 +325,6 @@ void h264_i420_sideways_tile(const uint8_t *py, const uint8_t *pu, const uint8_t
 #endif
 }
 
-void h264_i420_scaled_to_rgb565be(const uint8_t *py, const uint8_t *pu, const uint8_t *pv, int w, int h, int W, int H,
-                                  int first, int lines, uint16_t *out)
-{
-    // each panel row is a source row converted once (two at a time, sharing their chroma) and
-    // then picked out pixel by pixel
-    static int16_t sx[LCD_MAX_W];
-    static int last_w, last_W;
-    if (w != last_w || W != last_W) {
-        for (int c = 0; c < W && c < LCD_MAX_W; c++) {
-            sx[c] = c * w / W;
-        }
-        last_w = w;
-        last_W = W;
-    }
-    static uint16_t *pair; // the source row pair last converted
-    static int pair_cap, pair_y = -1;
-    static const uint8_t *pair_frame;
-    if (pair_cap < 2 * w) {
-        heap_caps_free(pair);
-        pair = heap_caps_malloc(2 * w * sizeof(uint16_t), MALLOC_CAP_SPIRAM);
-        pair_cap = pair ? 2 * w : 0;
-        pair_y = -1;
-        if (!pair) {
-            return;
-        }
-    }
-    if (first == 0) {
-        pair_y = -1; // a new frame, maybe in the same buffer
-    }
-    for (int r = first; r < first + lines; r++) {
-        int sy = r * h / H, y0 = sy & ~1;
-        if (y0 != pair_y || py != pair_frame) {
-            h264_i420_rows_to_rgb565be(py + y0 * w, pu + y0 / 2 * (w / 2), pv + y0 / 2 * (w / 2), w, w, 2, pair);
-            pair_y = y0;
-            pair_frame = py;
-        }
-#if CONFIG_CHANNELSTV_STAGE_TIMING
-        int64_t t0 = esp_timer_get_time();
-#endif
-        const uint16_t *src = pair + (sy & 1) * w;
-        uint16_t *o = out + (r - first) * W;
-        for (int c = 0; c < W; c++) {
-            o[c] = src[sx[c]];
-        }
-#if CONFIG_CHANNELSTV_STAGE_TIMING
-        h264_scale_us += esp_timer_get_time() - t0;
-#endif
-    }
-}
-
 #if CONFIG_CHANNELSTV_STAGE_TIMING
 static uint16_t ref_px(const uint8_t *py, const uint8_t *pu, const uint8_t *pv, int w, int x, int y)
 {
