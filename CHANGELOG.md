@@ -1,11 +1,16 @@
 # Changelog
 
-## Unreleased
+## v0.6.0 (2026-11-16)
 
-- README: the AMOLED-1.8 V1 (SH8601 and FT3168) is untested; it has its own code path but
-  hasn't been tried on that board. The README also describes v0.5.0's picture options, frame
-  rate and upscaling (AMOLED-1.8 only), the `/api/settings` parameters and the Wi-Fi setup
-  hotspot as they are now.
+- AMOLED-1.8: faster sideways picture, 24 fps at full size; the frame rate is 24 by default, 20 on
+  Fill screen.
+- Settings → Bitrate: Auto (by the picture's size and frame rate) or a fixed rate.
+- AMOLED-1.8 BOOT key: a tap mutes, held it turns the volume down, tapped then held up.
+- Board name; the number pad in folders of numbered items; volume in steps of 5; one page per
+  swipe, and a touch stops a slide.
+- Upscaling is gone: the full picture now plays smoothly.
+- Fixed: a dotted line across the sideways picture; restarts from `/api/screen` at full size or
+  while a picture started.
 
 ## v0.5.0 (2026-11-12)
 
