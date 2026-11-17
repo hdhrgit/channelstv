@@ -251,6 +251,11 @@ static bool sta_saved(void)
 
 static esp_timer_handle_t s_retry;
 static volatile int s_rssi_avg; // dBm, smoothed (roam_task); 0 until connected
+// Reconnecting: tries in a row that failed, and set after a few for roam_task to look for the
+// strongest access point itself and go to that one; drops since start and the last one's reason
+static volatile int s_fails;
+static volatile bool s_rescan;
+static int s_drops, s_last_reason;
 
 // Every connect looks on all channels and takes the strongest access point with the network's
 // name: the first one heard was often a far one of several.
@@ -259,29 +264,64 @@ static void sta_strongest(wifi_config_t *cfg)
     cfg->sta.scan_method = WIFI_ALL_CHANNEL_SCAN;
     cfg->sta.sort_method = WIFI_CONNECT_AP_BY_SIGNAL;
     cfg->sta.threshold.rssi = -127;
+    cfg->sta.bssid_set = false; // one picked by rescan() (the driver keeps it in NVS) holds until the next drop only
+    cfg->sta.channel = 0;
 }
 
-// The signal, smoothed for the screen. Weak for half a minute while nothing plays: if an
-// access point of the same network is clearly stronger, reconnect (to the strongest).
-#define ROAM_BELOW  -75
-#define ROAM_GAIN   8 // dB better than now
-#define ROAM_MS     2000
+static void sta_connect(void);
+
+// After a few failed tries: scans for the saved network and joins its strongest access point by
+// its address, where the driver's own pick kept going back to one out of reach
+static void rescan(void)
+{
+    wifi_config_t cfg;
+    wifi_ap_record_t best;
+    uint16_t n = 1;
+    s_rescan = false;
+    if (esp_wifi_get_config(WIFI_IF_STA, &cfg) == ESP_OK && cfg.sta.ssid[0]) {
+        wifi_scan_config_t sc = {.ssid = cfg.sta.ssid};
+        if (esp_wifi_scan_start(&sc, true) == ESP_OK && esp_wifi_scan_get_ap_records(&n, &best) == ESP_OK && n) {
+            ESP_LOGI(TAG, "joining the strongest access point: %d dBm, channel %d", best.rssi, best.primary);
+            memcpy(cfg.sta.bssid, best.bssid, 6);
+            cfg.sta.bssid_set = true;
+            cfg.sta.channel = best.primary;
+            esp_wifi_set_config(WIFI_IF_STA, &cfg);
+        }
+        esp_wifi_clear_ap_list();
+    }
+    sta_connect();
+}
+
+// The signal, smoothed for the screen. Weak for half a minute while nothing plays, or very weak
+// for 10 s while something does (a scan stalls the stream for a moment, a lost link for good): if
+// an access point of the same network is clearly stronger, reconnect (to the strongest).
+#define ROAM_BELOW      -75
+#define ROAM_PLAY_BELOW -80
+#define ROAM_GAIN       8 // dB better than now
+#define ROAM_MS         2000
 static void roam_task(void *arg)
 {
-    int weak = 0;
+    int weak = 0, very = 0;
     while (true) {
         vTaskDelay(pdMS_TO_TICKS(ROAM_MS));
+        if (s_rescan && !setup_active()) {
+            rescan();
+            continue;
+        }
         wifi_ap_record_t ap;
         if (!s_connected || esp_wifi_sta_get_ap_info(&ap) != ESP_OK) {
             s_rssi_avg = 0;
-            weak = 0;
+            weak = very = 0;
             continue;
         }
         s_rssi_avg = s_rssi_avg ? (s_rssi_avg * 3 + ap.rssi) / 4 : ap.rssi;
         weak = s_rssi_avg < ROAM_BELOW ? weak + 1 : 0;
-        if (weak < 15 || tv_playing() || player_is_playing() || setup_active()) {
-            continue; // a scan stalls the stream for a moment: only when nothing plays
+        very = s_rssi_avg < ROAM_PLAY_BELOW ? very + 1 : 0;
+        bool playing = tv_playing() || player_is_playing();
+        if (setup_active() || (playing ? very < 5 : weak < 15)) {
+            continue;
         }
+        very = 0;
         weak = 0;
         wifi_scan_config_t sc = {.ssid = ap.ssid};
         uint16_t n = 1;
@@ -379,13 +419,30 @@ static void wifi_event(void *arg, esp_event_base_t base, int32_t id, void *data)
             }
             return;
         }
-        vTaskDelay(pdMS_TO_TICKS(1000));
-        sta_connect();
+        s_drops++;
+        s_last_reason = ((wifi_event_sta_disconnected_t *)data)->reason;
+        s_fails++;
+        wifi_config_t cfg;
+        if (esp_wifi_get_config(WIFI_IF_STA, &cfg) == ESP_OK && cfg.sta.bssid_set) {
+            // the access point picked last time is gone too: any of the network's again
+            cfg.sta.bssid_set = false;
+            cfg.sta.channel = 0;
+            esp_wifi_set_config(WIFI_IF_STA, &cfg);
+        }
+        if (s_fails >= 3 && s_fails % 3 == 0) {
+            s_rescan = true; // roam_task looks for the strongest itself
+            return;
+        }
+        // 1, 2, 4, then 8 s apart: an access point that turned the board away gets a moment
+        int s = s_fails < 4 ? 1 << (s_fails - 1) : 8;
+        esp_timer_stop(s_retry);
+        esp_timer_start_once(s_retry, s * 1000000LL);
     } else if (base == IP_EVENT && id == IP_EVENT_STA_GOT_IP) {
         ip_event_got_ip_t *e = data;
         snprintf(s_ip, sizeof(s_ip), IPSTR, IP2STR(&e->ip_info.ip));
         s_connected = true;
         s_joined = true;
+        s_fails = 0;
         ESP_LOGI(TAG, "got ip %s", s_ip);
         // reaching the network proves a freshly flashed image is good
         esp_ota_mark_app_valid_cancel_rollback();
@@ -432,6 +489,8 @@ void app_net(net_t *out)
 {
     memset(out, 0, sizeof(*out));
     out->connected = s_connected;
+    out->drops = s_drops;
+    out->last_reason = s_last_reason;
     strlcpy(out->ip, s_ip, sizeof(out->ip));
     wifi_ap_record_t ap;
     if (s_connected && esp_wifi_sta_get_ap_info(&ap) == ESP_OK) {

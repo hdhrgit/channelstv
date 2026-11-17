@@ -203,6 +203,8 @@ static esp_err_t status(httpd_req_t *req)
     cJSON_AddStringToObject(wifi, "ssid", net.ssid);
     cJSON_AddStringToObject(wifi, "ip", net.ip);
     cJSON_AddNumberToObject(wifi, "rssi", net.rssi);
+    cJSON_AddNumberToObject(wifi, "drops", net.drops);
+    cJSON_AddNumberToObject(wifi, "last_reason", net.last_reason);
     battery_t bat;
     board_battery(&bat);
     cJSON *b = cJSON_AddObjectToObject(root, "battery");

@@ -13,6 +13,8 @@ typedef struct {
     char ssid[33];
     char ip[16];
     int rssi;
+    int drops;       // times the network was lost since start
+    int last_reason; // the Wi-Fi driver's reason for the last of them (0: none)
 } net_t;
 void app_net(net_t *out);
 bool app_online(void);
