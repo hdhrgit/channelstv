@@ -255,6 +255,7 @@ static volatile int s_rssi_avg; // dBm, smoothed (roam_task); 0 until connected
 // strongest access point itself and go to that one; drops since start and the last one's reason
 static volatile int s_fails;
 static volatile bool s_rescan;
+static volatile bool s_moving; // roam_task left the access point on purpose: not a drop
 static int s_drops, s_last_reason;
 
 // Every connect looks on all channels and takes the strongest access point with the network's
@@ -292,9 +293,9 @@ static void rescan(void)
     sta_connect();
 }
 
-// The signal, smoothed for the screen. Weak for half a minute while nothing plays, or very weak
-// for 10 s while something does (a scan stalls the stream for a moment, a lost link for good): if
-// an access point of the same network is clearly stronger, reconnect (to the strongest).
+// The signal, smoothed for the screen. Weak for 10 s while nothing plays, or very weak for 10 s
+// while something does (a scan stalls the stream for a moment, a lost link for good): if an access
+// point of the same network is clearly stronger, reconnect (to the strongest).
 #define ROAM_BELOW      -75
 #define ROAM_PLAY_BELOW -80
 #define ROAM_GAIN       8 // dB better than now
@@ -318,17 +319,17 @@ static void roam_task(void *arg)
         weak = s_rssi_avg < ROAM_BELOW ? weak + 1 : 0;
         very = s_rssi_avg < ROAM_PLAY_BELOW ? very + 1 : 0;
         bool playing = tv_playing() || player_is_playing();
-        if (setup_active() || (playing ? very < 5 : weak < 15)) {
+        if (setup_active() || (playing ? very < 5 : weak < 5)) {
             continue;
         }
-        very = 0;
-        weak = 0;
+        weak = very = 0;
         wifi_scan_config_t sc = {.ssid = ap.ssid};
         uint16_t n = 1;
         wifi_ap_record_t best;
         if (esp_wifi_scan_start(&sc, true) == ESP_OK && esp_wifi_scan_get_ap_records(&n, &best) == ESP_OK && n &&
             best.rssi >= s_rssi_avg + ROAM_GAIN && memcmp(best.bssid, ap.bssid, 6)) {
             ESP_LOGI(TAG, "moving to a stronger access point: %d dBm, now %d", best.rssi, s_rssi_avg);
+            s_moving = true;
             esp_wifi_disconnect(); // the reconnect takes the strongest
         }
         esp_wifi_clear_ap_list();
@@ -419,8 +420,11 @@ static void wifi_event(void *arg, esp_event_base_t base, int32_t id, void *data)
             }
             return;
         }
-        s_drops++;
-        s_last_reason = ((wifi_event_sta_disconnected_t *)data)->reason;
+        if (!s_moving) {
+            s_drops++;
+            s_last_reason = ((wifi_event_sta_disconnected_t *)data)->reason;
+        }
+        s_moving = false;
         s_fails++;
         wifi_config_t cfg;
         if (esp_wifi_get_config(WIFI_IF_STA, &cfg) == ESP_OK && cfg.sta.bssid_set) {
