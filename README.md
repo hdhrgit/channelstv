@@ -6,6 +6,9 @@ ESP32-S3 touchscreen, through the [DLNA bridge for Channels DVR](https://github.
 The bridge converts each stream into something the board can decode (H.264 Constrained
 Baseline, one slice per frame, sized for the board's screen, with mono AAC-LC audio). The board finds the
 bridge on the network by itself, lists what the bridge serves, and plays it with sound.
+That is only one of the formats the bridge can serve: the same channels and recordings also go
+to TVs and other players as the DVR's own stream, converted to other sizes, or as sound alone (see
+[Other formats](#other-formats)).
 
 ![channelstv on the board: Wi-Fi setup, browsing, the number pad, live TV, the playback controls, seeking a recording, Settings, About](docs/demo.gif)
 
@@ -282,6 +285,28 @@ Then tap **Find the bridge again** in Settings (or restart the board) so it chec
 `"ads": "cut"` plays recordings without their ads; leave it out to keep them. `"seek": "time"`
 offers recordings with DLNA time seek, for the board's 30 s keys and resume (on the settings
 page: Seeking, by time); with `"bytes"` they play from the start to the end.
+
+### Other formats
+
+The `esp32` profile is one client among others on the same bridge, so the boards can share it with
+TVs and other players, each getting its own format. In the bridge's settings each client (matched by
+its address or User-Agent, or picked with `?profile=NAME` on a stream URL) gets a profile:
+
+- **Through the bridge:** the DVR's own stream, passed through with the DLNA headers TVs expect,
+  and seekable by bytes. **Direct** has the player fetch the DVR's stream itself.
+- **Converted:** H.264 in an MPEG-TS, made by ffmpeg, with the client's own largest size, frame rate,
+  video and audio bitrate, audio channels and H.264 profile.
+- **Sound only:** the live channels (and, from a DLNA media server, each video) as AAC or MP3 at the
+  client's bitrate, or the channel's own sound unconverted, in Audio folders, for players without
+  a screen.
+
+A converted stream also takes the same overrides the boards use, for one request:
+`w=`, `h=`, `fit=` (`scale`, `crop43`, `width`, `height` or `fill`), `fps=`, `vb=` and `ab=`
+(the video and audio kbit/s), for example
+`http://192.0.2.20:8200/stream/live/7?profile=NAME&w=640&h=360&fit=width&fps=30`, held to the
+limits in the bridge's settings (by default 640x480, 30 fps). `GET /api/caps` on the bridge lists
+them, and `/channels.m3u?profile=NAME` lists every channel in a client's format, for players that
+take a playlist. The [dlna-bridge README](https://github.com/hdhrgit/dlna-bridge) has the details.
 
 ## Building
 
