@@ -753,7 +753,7 @@ unsigned bridge_gen(void)
 // The video bitrate to ask for, in kbps: the esp32 profile's 250 suits 240x144 (0.3 bits a pixel at 24 fps),
 // and the bridge's fast encoder looks better with more. 0.55 bits a pixel, but decoding takes longer with more
 // pixels a second and with more bits: at most 700 up to 2.5 million pixels a second (448x368 at 15 fps), falling
-// to 300 at 3.96 million (448x368 at 24 fps decodes in time only up to about 300).
+// to 480 at 3.96 million (448x368 at 24 fps, which decodes in time at 480 with the flash and PSRAM at 120 MHz).
 static int video_kbps(int w, int h, bool width_fit)
 {
     if (!w || !h) {
@@ -763,7 +763,7 @@ static int video_kbps(int w, int h, bool width_fit)
         h = w * 9 / 16; // the whole 16:9 picture across the width
     }
     int kpps = w * h * bridge_fps() / 1000, kbps = kpps * 55 / 100;
-    int most = kpps <= 2500 ? 700 : 700 - (kpps - 2500) * 275 / 1000;
+    int most = kpps <= 2500 ? 700 : 700 - (kpps - 2500) * 150 / 1000;
     kbps = kbps > most ? most : kbps;
     kbps = kbps < 250 ? 250 : kbps;
     return (kbps + 5) / 10 * 10;

@@ -250,7 +250,7 @@ AMOLED-1.8 adds its screen's size instead (`w=448&h=368` sideways), with `fit=wi
 and `fit=height` for the 4:3 centre and Fill screen, and `fps=`.
 Both add `vb=`, a video bitrate: Settings → Bitrate, or with Auto one for the picture they ask for, 0.55 bits a
 pixel from 250 to 700 kbps, less the more pixels a second the board has to decode (460 kbps for the 1.54's
-240x144, 480 for the AMOLED-1.8's 448x368 at 20 fps, 300 at 24 fps). It takes the place of the profile's `video_kbps`.
+240x144, 580 for the AMOLED-1.8's 448x368 at 20 fps, 480 at 24 fps). It takes the place of the profile's `video_kbps`.
 
 Newer bridges have the `esp32` profile built in, so there is nothing to add; a client named
 `esp32` in the bridge's settings still takes its place, for tuning. On older ones, add it as
