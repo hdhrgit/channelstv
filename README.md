@@ -169,7 +169,7 @@ out); if the board falls minutes behind, it skips ahead to what the bridge has j
 ## Web page and API
 
 The board serves a web page and an HTTP API on port 80, at `http://<board-ip>/` (for example
-`http://192.0.2.10/`). Settings → **Version** shows the board's address on its screen; the
+`http://192.0.2.10/`). Settings → **Version & board** shows the board's address on its screen; the
 router's list of devices has it too.
 
 **Web control** (Settings) says how much of it answers:
