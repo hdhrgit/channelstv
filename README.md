@@ -6,9 +6,8 @@ ESP32-S3 touchscreen, through the [DLNA bridge for Channels DVR](https://github.
 The bridge converts each stream into something the board can decode (H.264 Constrained
 Baseline, one slice per frame, sized for the board's screen, with mono AAC-LC audio). The board finds the
 bridge on the network by itself, lists what the bridge serves, and plays it with sound.
-The bridge doesn't have to sit in front of a Channels DVR: from dlna-bridge 0.99.14 it can also
-serve another DLNA media server or an M3U/M3U8 playlist of channels, and the board browses and plays
-those through it the same way (see [Other sources](#other-sources)).
+Besides Channels DVR, the bridge can also serve other DLNA media servers and M3U/M3U8 playlists
+(see [its README](https://github.com/hdhrgit/dlna-bridge#other-sources)).
 
 ![channelstv on the board: Wi-Fi setup, browsing, the number pad, live TV, the playback controls, seeking a recording, Settings, About](docs/demo.gif)
 
@@ -285,28 +284,6 @@ Then tap **Find the bridge again** in Settings (or restart the board) so it chec
 `"ads": "cut"` plays recordings without their ads; leave it out to keep them. `"seek": "time"`
 offers recordings with DLNA time seek, for the board's 30 s keys and resume (on the settings
 page: Seeking, by time); with `"bytes"` they play from the start to the end.
-
-### Other sources
-
-Channels DVR is the bridge's usual source, but from dlna-bridge 0.99.14 it can serve one of these
-instead, set in `DLNA_SOURCE` (or `-source`):
-
-```
-DLNA_SOURCE=192.0.2.30                            # a Channels DVR elsewhere, or a DLNA media server
-DLNA_SOURCE=http://192.0.2.30:8200/rootDesc.xml   # a DLNA media server's description
-DLNA_SOURCE=http://example.com/channels.m3u8      # an M3U or M3U8 playlist of channels
-```
-
-- **A DLNA media server** (a NAS, minidlna, Plex, Jellyfin, Emby): its own folders, its videos and,
-  in an Audio folder, its sound.
-- **An M3U or M3U8 playlist:** its channels in Live TV, numbered by `tvg-chno` and in a folder per
-  `group-title`. An HLS channel is passed on as an MPEG-TS.
-
-The bridge works out which kind it is when it starts (`DLNA_SOURCE_TYPE` can say so instead). The
-board finds the bridge and asks for the `esp32` profile the same way whatever the source, and browses
-the folders the bridge shows. What only a Channels DVR gives is left out with other sources: the
-DVR's folders, commercial cutting, shared resume points and seeking in recordings. The
-[dlna-bridge README](https://github.com/hdhrgit/dlna-bridge#other-sources) has the details.
 
 ## Building
 
