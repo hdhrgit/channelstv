@@ -1,5 +1,17 @@
 # Changelog
 
+## v0.7.0 (2026-11-20)
+
+- Flash and PSRAM at 120 MHz (were 80): a faster picture. This needs a new bootloader, which an
+  OTA update can't bring: flash `channelstv-v0.7.0-full.bin` over USB once; OTA works as before
+  after that. Don't send this OTA image to a board on v0.6.0 or earlier; from now on, a board on
+  the old bootloader refuses OTA images and says why.
+- AMOLED-1.8: 24 fps by default on Fill screen too.
+- Auto bitrate, AMOLED-1.8: higher rates for the full screen and for 16:9 sideways.
+- Wi-Fi: after three failed tries the board scans and joins the strongest access point; it moves
+  off a very weak one sooner, while playing too. `/api/status` counts the drops and gives the last
+  one's reason.
+
 ## v0.6.0 (2026-11-16)
 
 - AMOLED-1.8: faster sideways picture, 24 fps at full size; the frame rate is 24 by default, 20 on
