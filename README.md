@@ -6,9 +6,9 @@ ESP32-S3 touchscreen, through the [DLNA bridge for Channels DVR](https://github.
 The bridge converts each stream into something the board can decode (H.264 Constrained
 Baseline, one slice per frame, sized for the board's screen, with mono AAC-LC audio). The board finds the
 bridge on the network by itself, lists what the bridge serves, and plays it with sound.
-That is only one of the formats the bridge can serve: the same channels and recordings also go
-to TVs and other players as the DVR's own stream, converted to other sizes, or as sound alone (see
-[Other formats](#other-formats)).
+The bridge doesn't have to sit in front of a Channels DVR: from dlna-bridge 0.99.14 it can also
+serve another DLNA media server or an M3U/M3U8 playlist of channels, and the board browses and plays
+those through it the same way (see [Other sources](#other-sources)).
 
 ![channelstv on the board: Wi-Fi setup, browsing, the number pad, live TV, the playback controls, seeking a recording, Settings, About](docs/demo.gif)
 
@@ -286,27 +286,27 @@ Then tap **Find the bridge again** in Settings (or restart the board) so it chec
 offers recordings with DLNA time seek, for the board's 30 s keys and resume (on the settings
 page: Seeking, by time); with `"bytes"` they play from the start to the end.
 
-### Other formats
+### Other sources
 
-The `esp32` profile is one client among others on the same bridge, so the boards can share it with
-TVs and other players, each getting its own format. In the bridge's settings each client (matched by
-its address or User-Agent, or picked with `?profile=NAME` on a stream URL) gets a profile:
+Channels DVR is the bridge's usual source, but from dlna-bridge 0.99.14 it can serve one of these
+instead, set in `DLNA_SOURCE` (or `-source`):
 
-- **Through the bridge:** the DVR's own stream, passed through with the DLNA headers TVs expect,
-  and seekable by bytes. **Direct** has the player fetch the DVR's stream itself.
-- **Converted:** H.264 in an MPEG-TS, made by ffmpeg, with the client's own largest size, frame rate,
-  video and audio bitrate, audio channels and H.264 profile.
-- **Sound only:** the live channels (and, from a DLNA media server, each video) as AAC or MP3 at the
-  client's bitrate, or the channel's own sound unconverted, in Audio folders, for players without
-  a screen.
+```
+DLNA_SOURCE=192.0.2.30                            # a Channels DVR elsewhere, or a DLNA media server
+DLNA_SOURCE=http://192.0.2.30:8200/rootDesc.xml   # a DLNA media server's description
+DLNA_SOURCE=http://example.com/channels.m3u8      # an M3U or M3U8 playlist of channels
+```
 
-A converted stream also takes the same overrides the boards use, for one request:
-`w=`, `h=`, `fit=` (`scale`, `crop43`, `width`, `height` or `fill`), `fps=`, `vb=` and `ab=`
-(the video and audio kbit/s), for example
-`http://192.0.2.20:8200/stream/live/7?profile=NAME&w=640&h=360&fit=width&fps=30`, held to the
-limits in the bridge's settings (by default 640x480, 30 fps). `GET /api/caps` on the bridge lists
-them, and `/channels.m3u?profile=NAME` lists every channel in a client's format, for players that
-take a playlist. The [dlna-bridge README](https://github.com/hdhrgit/dlna-bridge) has the details.
+- **A DLNA media server** (a NAS, minidlna, Plex, Jellyfin, Emby): its own folders, its videos and,
+  in an Audio folder, its sound.
+- **An M3U or M3U8 playlist:** its channels in Live TV, numbered by `tvg-chno` and in a folder per
+  `group-title`. An HLS channel is passed on as an MPEG-TS.
+
+The bridge works out which kind it is when it starts (`DLNA_SOURCE_TYPE` can say so instead). The
+board finds the bridge and asks for the `esp32` profile the same way whatever the source, and browses
+the folders the bridge shows. What only a Channels DVR gives is left out with other sources: the
+DVR's folders, commercial cutting, shared resume points and seeking in recordings. The
+[dlna-bridge README](https://github.com/hdhrgit/dlna-bridge#other-sources) has the details.
 
 ## Building
 
