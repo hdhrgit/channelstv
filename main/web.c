@@ -9,6 +9,7 @@
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "esp_app_desc.h"
+#include "esp_flash.h"
 #include "esp_heap_caps.h"
 #include "esp_http_server.h"
 #include "esp_lvgl_port.h"
@@ -738,12 +739,35 @@ static esp_err_t wifi_outage(httpd_req_t *req)
 }
 #endif
 
+// Images run the flash at 120 MHz in its high performance mode: they need a bootloader that knows
+// that mode (CONFIG_BOOTLOADER_PROJECT_VER 2 or later) and a flash chip IDF 5.4.2 has one for.
+static bool ota_board_ok(void)
+{
+    static const uint32_t hpm_ids[] = {0x204017, 0x204018, 0x464016, 0x464017, 0x464018,
+                                       0xC84016, 0xC84017, 0xC84018, 0x5E4016};
+    esp_bootloader_desc_t boot;
+    uint32_t id = 0;
+    if (esp_ota_get_bootloader_description(NULL, &boot) != ESP_OK ||
+        boot.version < CONFIG_BOOTLOADER_PROJECT_VER || esp_flash_read_id(NULL, &id) != ESP_OK) {
+        return false;
+    }
+    for (int i = 0; i < sizeof(hpm_ids) / sizeof(hpm_ids[0]); i++) {
+        if (id == hpm_ids[i]) {
+            return true;
+        }
+    }
+    return false;
+}
+
 // The body is a raw app image (build/channelstv.bin). It goes to the spare slot and the board
 // reboots into it; main.c rolls back if the new image doesn't reach Wi-Fi in time.
 static esp_err_t ota(httpd_req_t *req)
 {
     if (!app_ota_enabled()) {
         return httpd_resp_send_err(req, HTTPD_403_FORBIDDEN, "OTA updates are off: enable them on the board, Settings -> OTA updates");
+    }
+    if (!ota_board_ok()) {
+        return httpd_resp_send_err(req, HTTPD_403_FORBIDDEN, "This board needs a new bootloader: flash channelstv-<version>-full.bin over USB once");
     }
     const esp_partition_t *part = esp_ota_get_next_update_partition(NULL);
     if (!part || req->content_len <= 0 || req->content_len > part->size) {

@@ -74,6 +74,12 @@ curl --data-binary @channelstv-<version>-ota.bin -H 'Content-Type: application/o
 The board writes it to its spare app slot and restarts. If the new image can't get onto Wi-Fi
 within 90 seconds, the board goes back to the previous one.
 
+**After v0.6.0, one USB flash:** the releases after v0.6.0 run the flash and PSRAM at 120 MHz, which
+needs a new bootloader, and an OTA update can't change the bootloader. Flash the full image over USB
+once (as for a first install); OTA updates work as before after that. Don't send their OTA image to
+a board on v0.6.0 or earlier, and a board still on the old bootloader refuses OTA images, with a
+message that says so.
+
 ## Wi-Fi setup
 
 With no network saved, the board opens its own hotspot, **`channelstv-setup`** (no password),
@@ -134,7 +140,7 @@ The setup page then offers **Back to <network>** for the one just forgotten.
 - **Settings:** Touch test (tap five dots; the board works out how the touch panel lines up with
   the screen and keeps it), Picture (16:9 or the centre 4:3; on the AMOLED-1.8 also Fill screen,
   the middle of the picture cropped to the screen's shape), on the AMOLED-1.8 Frame rate (24, 20
-  or 15 fps, default 24, 20 on Fill screen: what the board asks the bridge for; the 1.54 always asks for 24),
+  or 15 fps, default 24: what the board asks the bridge for; the 1.54 always asks for 24),
   Bitrate (Auto, or 250, 400, 550, 700, 1000 or 1500 kbps; Auto asks for 250 to 700
   by the picture's size and frame rate; over 700 kbps the board may drop frames or stutter, and the row shows ⚠),
   Rotation, Backlight

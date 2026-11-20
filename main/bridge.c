@@ -642,11 +642,10 @@ static void bridge_task(void *arg)
     }
 }
 
-// Without a frame rate set: 24, but 20 for Fill screen on the larger panel (its 448x368 holds 24 only at
-// the lowest bitrates)
+// Without a frame rate set: 24
 static int fps_default(void)
 {
-    return LCD_W * LCD_H > 240 * 240 && s_full ? 20 : 24;
+    return 24;
 }
 
 int bridge_fps(void)
