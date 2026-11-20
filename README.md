@@ -242,17 +242,16 @@ Clear the field to go back to finding the bridge automatically.
 ## Bridge setup
 
 The board asks for the client profile `esp32` (16:9, 240x144 on the 1.54). It adds `?profile=esp32` to its
-requests and sends the User-Agent `channelstv/<version>`. Without this client the bridge sends
-the DVR's original stream, which the board can't decode. For the centre 4:3 of the picture
+requests and sends the User-Agent `channelstv/<version>`. For the centre 4:3 of the picture
 (Picture in Settings or on the web page) it adds the bridge's overrides
-`w=240&h=192&fit=crop43` to the stream URLs, which needs dlna-bridge v0.99.10 or later. The
-AMOLED-1.8 adds its screen's size instead (`w=448&h=368` sideways), with `fit=width` for 16:9
-and `fit=height` for the 4:3 centre and Fill screen, and `fps=`.
-Both add `vb=`, a video bitrate: Settings → Bitrate, or with Auto one for the picture they ask for, 0.55 bits a
+`w=240&h=192&fit=crop43` to the stream URLs. The
+AMOLED-1.8 adds its screen's size instead (`w=448&h=368` sideways, `w=320&h=240` for the 4:3 centre), with `fit=width` for 16:9
+and `fit=height` for the 4:3 centre and Fill screen.
+Both add `fps=` (always 24 on the 1.54) and `vb=`, a video bitrate: Settings → Bitrate, or with Auto one for the picture they ask for, 0.55 bits a
 pixel from 250 to 700 kbps, less the more pixels a second the board has to decode (460 kbps for the 1.54's
 240x144, 580 for the AMOLED-1.8's 448x368 at 20 fps, 480 at 24 fps). It takes the place of the profile's `video_kbps`.
 
-Newer bridges have the `esp32` profile built in, so there is nothing to add; a client named
+dlna-bridge 0.99.11 and later have the `esp32` profile built in, so there is nothing to add; a client named
 `esp32` in the bridge's settings still takes its place, for tuning.
 
 The board checks the profile whenever it finds the bridge: it reads the bridge's `/api/state` (it
