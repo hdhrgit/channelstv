@@ -253,8 +253,7 @@ pixel from 250 to 700 kbps, less the more pixels a second the board has to decod
 240x144, 580 for the AMOLED-1.8's 448x368 at 20 fps, 480 at 24 fps). It takes the place of the profile's `video_kbps`.
 
 Newer bridges have the `esp32` profile built in, so there is nothing to add; a client named
-`esp32` in the bridge's settings still takes its place, for tuning. On older ones, add it as
-below.
+`esp32` in the bridge's settings still takes its place, for tuning.
 
 The board checks the profile whenever it finds the bridge: it reads the bridge's `/api/state` (it
 never writes to the bridge), takes the `esp32` client from its settings or else the built-in
