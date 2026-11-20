@@ -269,28 +269,6 @@ it, goes by the bridge's version. With an older bridge it doesn't play, and the 
 say "Update dlna-bridge to 0.99.12 or later" (`/api/status`: `bridge.update` is the version needed).
 dlna-bridge 0.99.13 or later is recommended when several players watch the same channel.
 
-On a bridge without the built-in profile, add the client on its settings page, or with `curl` and
-[`jq`](https://jqlang.org/). `PUT /api/config` takes the whole configuration, so this reads the
-current one from `/api/state`, puts the client in (replacing any with the same name) and
-sends it back:
-
-```sh
-BRIDGE=http://<bridge-host>:8200
-curl -s $BRIDGE/api/state | jq --argjson new '[
-  {"name": "esp32", "user_agents": ["channelstv"],
-   "profile": {"mode": "transcode", "ads": "cut", "seek": "time",
-     "transcode": {"max_width": 240, "max_height": 144, "fps": 24, "video_kbps": 250,
-       "audio_kbps": 64, "audio_channels": 1, "h264_profile": "baseline",
-       "pre_scale": true, "exact_size": true, "single_slice": true}}}
-]' '.config | .clients = ([.clients[]? | select(.name != "esp32")] + $new)' |
-curl -s -X PUT -H 'Content-Type: application/json' --data-binary @- $BRIDGE/api/config
-```
-
-Then tap **Find the bridge again** in Settings (or restart the board) so it checks again.
-`"ads": "cut"` plays recordings without their ads; leave it out to keep them. `"seek": "time"`
-offers recordings with DLNA time seek, for the board's 30 s keys and resume (on the settings
-page: Seeking, by time); with `"bytes"` they play from the start to the end.
-
 ## Building
 
 Releases are built by GitHub Actions ([`.github/workflows/build.yml`](.github/workflows/build.yml))
