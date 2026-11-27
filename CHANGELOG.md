@@ -1,5 +1,14 @@
 # Changelog
 
+## v0.7.1 (2026-11-27)
+
+- Fixed: the picture slowed to one frame every 2 s after about 13 hours on one channel. Long plays
+  now stay right past 24 days too.
+- A picture stuck on its keyframes restarts its clock within about 10 s (`clock_resets` in
+  `/api/status`).
+- `/api/status`: `fps_recent`, the frame rate over the last 10 s.
+- Latency stays right when the packet count wraps after weeks on one channel.
+
 ## v0.7.0 (2026-11-20)
 
 - Flash and PSRAM at 120 MHz (were 80): a faster picture. This needs a new bootloader, which an
