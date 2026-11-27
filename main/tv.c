@@ -926,7 +926,8 @@ static void on_sound(demux_t *dm, int64_t pts, const uint8_t *data, int len)
 // The picture's queue runs alongside the sound, so it doesn't add to it.
 static void latency(demux_t *dm, int64_t now)
 {
-    static int64_t next_at, rate_bytes, rate_us;
+    static int64_t next_at, rate_us;
+    static uint32_t rate_packets; // the demuxer's count wraps (after ~50 days at 1.5 Mbps): only the difference counts
     static int32_t slots[LAT_SLOTS];
     static int slot, filled;
     static float bytes_per_ms;
@@ -934,7 +935,7 @@ static void latency(demux_t *dm, int64_t now)
         return;
     }
     if (!next_at || !s_preroll_done) { // a new playback
-        rate_bytes = (int64_t)dm->ts.packets * 188;
+        rate_packets = dm->ts.packets;
         rate_us = dm->audio_end_us;
         bytes_per_ms = 55; // ~440 kbps, until measured
         slot = filled = 0;
@@ -944,11 +945,10 @@ static void latency(demux_t *dm, int64_t now)
         next_at = 0;
         return;
     }
-    int64_t bytes = (int64_t)dm->ts.packets * 188;
     if (dm->audio_end_us - rate_us >= 5000000) {
-        float r = (bytes - rate_bytes) * 1000.0f / (dm->audio_end_us - rate_us);
+        float r = (uint32_t)(dm->ts.packets - rate_packets) * 188.0f * 1000.0f / (dm->audio_end_us - rate_us);
         bytes_per_ms = bytes_per_ms * 0.7f + r * 0.3f;
-        rate_bytes = bytes;
+        rate_packets = dm->ts.packets;
         rate_us = dm->audio_end_us;
     }
     int32_t ahead = dm->audio_end_us / 1000 - player_position_ms();
