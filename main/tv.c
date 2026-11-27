@@ -70,6 +70,7 @@ static char s_title[96];
 static char s_error[128];
 static volatile int64_t s_first_pts = -1; // of the stream's first picture ...
 static volatile int32_t s_media_ms;       // ... and how far past it the decoder is
+static int32_t s_first_ms_on;             // s_first_pts moved on by this much (long plays)
 static void (*volatile s_hook)(void *);   // tv_call_locked(): run by the decoder, which holds LVGL
 static void *volatile s_hook_arg;
 static int s_shown, s_dropped;
@@ -478,12 +479,14 @@ static void end_drawer(void)
 #define AU_QUEUE (768 * 1024)     // ~15 s of the bridge's video, in PSRAM
 #define PTS_MASK ((1LL << 33) - 1)
 #define PTS_JUMP (2 * 90000)      // a PTS step bigger than this is a discontinuity
+#define PTS_HOUR (3600LL * 90000) // how far a base PTS moves on at a time (pts_diff reaches ±13 h)
 
 typedef struct {
     volatile bool set;
     int64_t base_pts;            // this PTS ...
     volatile int32_t base_ms;    // ... is at this point on the sound's clock
 } epoch_map_t;
+static portMUX_TYPE s_map_lock = portMUX_INITIALIZER_UNLOCKED; // the decoder reads a base the demuxer moves
 
 #define HOLD_BYTES (16 * 1024)
 #define HOLD_N     96
@@ -674,6 +677,28 @@ static int64_t pts_diff(int64_t a, int64_t b)
     return d >= (1LL << 32) ? d - (1LL << 33) : d;
 }
 
+// Where a PTS is on the sound's clock.
+static int64_t map_ms(epoch_map_t *m, int64_t pts)
+{
+    taskENTER_CRITICAL(&s_map_lock);
+    int64_t base_pts = m->base_pts;
+    int32_t base_ms = m->base_ms;
+    taskEXIT_CRITICAL(&s_map_lock);
+    return base_ms + pts_diff(pts, base_pts) / 90;
+}
+
+// pts_diff turns around 13 h past the base, so an epoch that plays on moves its base an
+// hour on at a time, the PTS and its time together; the frames still queued stay well in reach
+static void map_follow(epoch_map_t *m, int64_t pts)
+{
+    while (m->set && pts_diff(pts, m->base_pts) > PTS_HOUR) {
+        taskENTER_CRITICAL(&s_map_lock);
+        m->base_pts = (m->base_pts + PTS_HOUR) & PTS_MASK;
+        m->base_ms += PTS_HOUR / 90;
+        taskEXIT_CRITICAL(&s_map_lock);
+    }
+}
+
 static void new_epoch(demux_t *dm)
 {
     dm->epoch++;
@@ -748,6 +773,7 @@ static void on_pes(void *ctx, int kind, int64_t pts, uint8_t *data, int len, boo
         new_epoch(dm);
     }
     dm->last_pts[kind] = pts;
+    map_follow(&s_map[dm->epoch & 3], pts);
     if (kind == TS_VIDEO) {
         if (gap) {
             dm->need_idr = true; // a lost slice spoils every frame up to the next keyframe
@@ -868,7 +894,7 @@ static void on_sound(demux_t *dm, int64_t pts, const uint8_t *data, int len)
     int64_t dur = adts_us(data, len), end_ms = dm->audio_end_us / 1000;
     // The player's clock counts the sound it was given, so the mapping follows what really
     // went in: lost sound moves the epoch's mapping back, sound that overlaps is dropped.
-    int64_t at = m->base_ms + pts_diff(pts, m->base_pts) / 90;
+    int64_t at = map_ms(m, pts);
     if (at > end_ms + 30) {
         m->base_ms -= at - end_ms;
         s_audio_gaps++;
@@ -1123,7 +1149,11 @@ static void tv_video_task(void *arg)
         if (s_first_pts < 0) {
             s_first_pts = pts;
         }
-        s_media_ms = pts_diff(pts, s_first_pts) / 90;
+        if (pts_diff(pts, s_first_pts) > PTS_HOUR) {
+            s_first_pts = (s_first_pts + PTS_HOUR) & PTS_MASK;
+            s_first_ms_on += PTS_HOUR / 90;
+        }
+        s_media_ms = s_first_ms_on + pts_diff(pts, s_first_pts) / 90;
         void (*hook)(void *) = s_hook;
         if (hook) {
             hook(s_hook_arg);
@@ -1164,7 +1194,7 @@ static void tv_video_task(void *arg)
             s_why = "speaker taken";
             break;
         }
-        frame_t fr = {.due_ms = m->base_ms + pts_diff(pts, m->base_pts) / 90};
+        frame_t fr = {.due_ms = map_ms(m, pts)};
         // more than half a second behind the clock: the frames up to the next keyframe go undecoded,
         // and the picture picks up again from there (each frame needs the one before, so not sooner)
         if (s_preroll_done && decoded && clock_ms(&s_clk) > fr.due_ms + 500) {
@@ -1300,7 +1330,7 @@ bool tv_play(const char *url, const char *title, bool live)
     s_why = "";
     s_pic_w = s_pic_h = 0;
     s_first_pts = -1;
-    s_media_ms = 0;
+    s_media_ms = s_first_ms_on = 0;
     s_busy = false;
     s_restarts = s_epochs = s_skipped = s_audio_gaps = s_audio_late = s_audio_gap_ms = 0;
     s_late_decoded = s_starved = 0;
