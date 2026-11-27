@@ -69,8 +69,8 @@ static char s_title[96];
 #define UNDECODABLE 25 // decode errors before the first picture that end playback
 static char s_error[128];
 static volatile int64_t s_first_pts = -1; // of the stream's first picture ...
-static volatile int32_t s_media_ms;       // ... and how far past it the decoder is
-static int32_t s_first_ms_on;             // s_first_pts moved on by this much (long plays)
+static int64_t s_media_ms;                // ... and how far past it the decoder is (under s_map_lock)
+static int64_t s_first_ms_on;             // s_first_pts moved on by this much (long plays)
 static void (*volatile s_hook)(void *);   // tv_call_locked(): run by the decoder, which holds LVGL
 static void *volatile s_hook_arg;
 static int s_shown, s_dropped;
@@ -487,7 +487,7 @@ static void end_drawer(void)
 typedef struct {
     volatile bool set;
     int64_t base_pts;            // this PTS ...
-    volatile int32_t base_ms;    // ... is at this point on the sound's clock
+    int64_t base_ms;             // ... is at this point on the sound's clock (both under s_map_lock: 64 bits)
 } epoch_map_t;
 static portMUX_TYPE s_map_lock = portMUX_INITIALIZER_UNLOCKED; // the decoder reads a base the demuxer moves
 
@@ -685,13 +685,29 @@ static int64_t map_ms(epoch_map_t *m, int64_t pts)
 {
     taskENTER_CRITICAL(&s_map_lock);
     int64_t base_pts = m->base_pts;
-    int32_t base_ms = m->base_ms;
+    int64_t base_ms = m->base_ms;
     taskEXIT_CRITICAL(&s_map_lock);
     return base_ms + pts_diff(pts, base_pts) / 90;
 }
 
 // pts_diff turns around 13 h past the base, so an epoch that plays on moves its base an
 // hour on at a time, the PTS and its time together; the frames still queued stay well in reach
+static void map_set(epoch_map_t *m, int64_t pts, int64_t ms)
+{
+    taskENTER_CRITICAL(&s_map_lock);
+    m->base_pts = pts;
+    m->base_ms = ms;
+    taskEXIT_CRITICAL(&s_map_lock);
+    m->set = true;
+}
+
+static void map_shift(epoch_map_t *m, int64_t ms)
+{
+    taskENTER_CRITICAL(&s_map_lock);
+    m->base_ms += ms;
+    taskEXIT_CRITICAL(&s_map_lock);
+}
+
 static void map_follow(epoch_map_t *m, int64_t pts)
 {
     while (m->set && pts_diff(pts, m->base_pts) > PTS_HOUR) {
@@ -795,10 +811,7 @@ static void on_pes(void *ctx, int kind, int64_t pts, uint8_t *data, int len, boo
                 dm->idr_seen = true;
                 dm->idr_pts = pts;
                 if (!dm->ts.apid) { // no sound: the picture keeps the time from here
-                    epoch_map_t *m = &s_map[dm->epoch & 3];
-                    m->base_pts = pts;
-                    m->base_ms = dm->audio_end_us / 1000;
-                    m->set = true;
+                    map_set(&s_map[dm->epoch & 3], pts, dm->audio_end_us / 1000);
                 }
                 // the held sound from the keyframe's time on comes first
                 for (int i = 0; i < dm->hold_n; i++) {
@@ -871,9 +884,7 @@ static void on_sound(demux_t *dm, int64_t pts, const uint8_t *data, int len)
         if (len < 7) {
             return; // all of it from before the first picture
         }
-        m->base_pts = pts;
-        m->base_ms = dm->audio_end_us / 1000;
-        m->set = true;
+        map_set(m, pts, dm->audio_end_us / 1000);
     }
     if (s_trim && s_preroll_done && dm->audio_end_us >= dm->trim_at_us && len >= 7 && data[0] == 0xff) {
         int flen = (data[3] & 3) << 11 | data[4] << 3 | data[5] >> 5;
@@ -886,7 +897,7 @@ static void on_sound(demux_t *dm, int64_t pts, const uint8_t *data, int len)
             pts = (pts + us * 9 / 100) & PTS_MASK;
             dm->trim_carry_us += us;
             int ms = dm->trim_carry_us / 1000;
-            m->base_ms -= ms;
+            map_shift(m, -ms);
             dm->trim_carry_us -= ms * 1000;
             s_trimmed_ms += ms;
             dm->trim_at_us = dm->audio_end_us + TRIM_EVERY_US;
@@ -900,7 +911,7 @@ static void on_sound(demux_t *dm, int64_t pts, const uint8_t *data, int len)
     // went in: lost sound moves the epoch's mapping back, sound that overlaps is dropped.
     int64_t at = map_ms(m, pts);
     if (at > end_ms + 30) {
-        m->base_ms -= at - end_ms;
+        map_shift(m, end_ms - at);
         s_audio_gaps++;
         s_audio_gap_ms += at - end_ms;
     } else if (at < end_ms - 30) {
@@ -1173,7 +1184,9 @@ static void tv_video_task(void *arg)
             s_first_pts = (s_first_pts + PTS_HOUR) & PTS_MASK;
             s_first_ms_on += PTS_HOUR / 90;
         }
+        taskENTER_CRITICAL(&s_map_lock);
         s_media_ms = s_first_ms_on + pts_diff(pts, s_first_pts) / 90;
+        taskEXIT_CRITICAL(&s_map_lock);
         void (*hook)(void *) = s_hook;
         if (hook) {
             hook(s_hook_arg);
@@ -1202,9 +1215,7 @@ static void tv_video_task(void *arg)
         for (int i = 0; !m->set && !s_stop; i++) {
             s_vstate = "waiting for the sound";
             if (i == 150) { // 3 s and still no sound: let the picture keep the time
-                m->base_pts = pts;
-                m->base_ms = clock_ms(&s_clk);
-                m->set = true;
+                map_set(m, pts, clock_ms(&s_clk));
             }
             frame_t idle = {.buf = FR_IDLE};
             xQueueSend(s_full_q, &idle, 0);
@@ -1487,9 +1498,12 @@ bool tv_seek_ignored(void)
     return s_playing && s_src && stream_seek_ignored(s_src);
 }
 
-int tv_position_ms(void)
+int64_t tv_position_ms(void)
 {
-    return s_media_ms;
+    taskENTER_CRITICAL(&s_map_lock);
+    int64_t ms = s_media_ms;
+    taskEXIT_CRITICAL(&s_map_lock);
+    return ms;
 }
 
 bool tv_call_locked(void (*fn)(void *), void *arg)
