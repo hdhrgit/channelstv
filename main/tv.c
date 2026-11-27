@@ -76,6 +76,8 @@ static void *volatile s_hook_arg;
 static int s_shown, s_dropped;
 static float s_decode_ms, s_draw_ms, s_fps;
 static float s_fps_recent; // over the last 10 s
+static volatile bool s_clock_reset; // the decoder asks the demuxer for a new epoch
+static uint32_t s_clock_resets;
 static volatile float s_frame_conv_ms, s_frame_draw_ms; // the last frame's: converting, and all of it
 static volatile bool s_live;         // a live channel: catching up and trimming keep it near the live edge
 static volatile int32_t s_frame_us = 41667; // a frame's time, from the PTS: the draw task's "late" limit
@@ -770,7 +772,8 @@ static void on_pes(void *ctx, int kind, int64_t pts, uint8_t *data, int len, boo
         return;
     }
     int64_t last = dm->last_pts[kind];
-    if (last >= 0 && llabs(pts_diff(pts, last)) > PTS_JUMP) {
+    if (s_clock_reset || (last >= 0 && llabs(pts_diff(pts, last)) > PTS_JUMP)) {
+        s_clock_reset = false;
         new_epoch(dm);
     }
     dm->last_pts[kind] = pts;
@@ -1144,15 +1147,24 @@ static void tv_video_task(void *arg)
     int w = s_pic_w, h = s_pic_h, decoded = 0, undecodable = 0;
     bool behind = false; // skipping to the next keyframe
     int64_t dec_us = 0, win_us = esp_timer_get_time();
-    uint32_t win_shown = 0;
+    uint32_t win_shown = 0, win_skipped = s_skipped;
     for (; !s_stop && n > AU_HEAD; n = next_au(au, true)) {
         int64_t pts;
         memcpy(&pts, au, 8);
         int64_t now_us = esp_timer_get_time();
         if (now_us - win_us >= 10000000) {
-            s_fps_recent = (s_shown - win_shown) * 1e6f / (now_us - win_us);
+            uint32_t shown = s_shown - win_shown, skipped = s_skipped - win_skipped;
+            s_fps_recent = shown * 1e6f / (now_us - win_us);
+            // frames keep coming and almost all go undecoded, behind a clock that has gone wrong:
+            // the time starts again from the next keyframe, as after a jump in the timestamps
+            if (s_preroll_done && shown < 20 && skipped >= 100) {
+                ESP_LOGW(TAG, "%u frames shown, %u skipped in 10 s: new clock", (unsigned)shown, (unsigned)skipped);
+                s_clock_resets++;
+                s_clock_reset = true;
+            }
             win_us = now_us;
             win_shown = s_shown;
+            win_skipped = s_skipped;
         }
         if (s_first_pts < 0) {
             s_first_pts = pts;
@@ -1341,7 +1353,8 @@ bool tv_play(const char *url, const char *title, bool live)
     s_media_ms = s_first_ms_on = 0;
     s_busy = false;
     s_restarts = s_epochs = s_skipped = s_audio_gaps = s_audio_late = s_audio_gap_ms = 0;
-    s_late_decoded = s_starved = 0;
+    s_late_decoded = s_starved = s_clock_resets = 0;
+    s_clock_reset = false;
     s_cc_errors = s_packets = s_au_bytes = 0;
     s_lat_ms = s_lat_min_ms = 0;
     s_trim = s_banner_want = false;
@@ -1544,7 +1557,7 @@ void tv_status_json(char *out, size_t len)
     snprintf(out, len,
              "{\"title\":\"%s\",\"playing\":%s,\"live\":%s,\"busy\":%s,\"width\":%d,\"height\":%d,\"fps\":%.1f,\"fps_recent\":%.1f,"
              "\"shown\":%d,\"dropped\":%d,\"decode_ms\":%.1f,\"draw_ms\":%.1f,\"frame_convert_ms\":%.1f,\"frame_draw_ms\":%.1f,\"first_picture_ms\":%d,"
-             "\"late_avg_ms\":%.1f,\"late_max_ms\":%d,\"restarts\":%u,\"epochs\":%u,\"skipped_to_idr\":%u,"
+             "\"late_avg_ms\":%.1f,\"late_max_ms\":%d,\"restarts\":%u,\"epochs\":%u,\"clock_resets\":%u,\"skipped_to_idr\":%u,"
              "\"audio_gaps\":%u,\"audio_gap_ms\":%u,\"audio_late\":%u,\"late_decoded\":%u,\"starved\":%u,"
              "\"cc_errors\":%u,\"packets\":%u,\"au_queue\":%u,\"latency_ms\":%d,\"latency_min_ms\":%d,"
              "\"trimming\":%s,\"trimmed_ms\":%u,\"catchups\":%u,\"catchup_skipped_ms\":%u,\"catching_up\":%s,"
@@ -1552,7 +1565,7 @@ void tv_status_json(char *out, size_t len)
              "\"ended\":\"%s\",\"error\":\"%s\",\"source\":%s}",
              title, s_playing ? "true" : "false", s_live ? "true" : "false", s_busy ? "true" : "false", s_pic_w, s_pic_h,
              s_fps, s_fps_recent, s_shown, s_dropped, s_decode_ms, s_draw_ms, s_frame_conv_ms, s_frame_draw_ms, s_first_ms, s_shown ? (float)s_late_sum_ms / s_shown : 0.0f,
-             s_late_max_ms, (unsigned)s_restarts, (unsigned)s_epochs, (unsigned)s_skipped, (unsigned)s_audio_gaps,
+             s_late_max_ms, (unsigned)s_restarts, (unsigned)s_epochs, (unsigned)s_clock_resets, (unsigned)s_skipped, (unsigned)s_audio_gaps,
              (unsigned)s_audio_gap_ms, (unsigned)s_audio_late, (unsigned)s_late_decoded, (unsigned)s_starved,
              (unsigned)s_cc_errors, (unsigned)s_packets, (unsigned)s_au_bytes, (int)s_lat_ms, (int)s_lat_min_ms,
              s_trim ? "true" : "false", (unsigned)s_trimmed_ms, (unsigned)s_catchups, (unsigned)s_catch_skipped_ms,
