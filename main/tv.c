@@ -75,6 +75,7 @@ static void (*volatile s_hook)(void *);   // tv_call_locked(): run by the decode
 static void *volatile s_hook_arg;
 static int s_shown, s_dropped;
 static float s_decode_ms, s_draw_ms, s_fps;
+static float s_fps_recent; // over the last 10 s
 static volatile float s_frame_conv_ms, s_frame_draw_ms; // the last frame's: converting, and all of it
 static volatile bool s_live;         // a live channel: catching up and trimming keep it near the live edge
 static volatile int32_t s_frame_us = 41667; // a frame's time, from the PTS: the draw task's "late" limit
@@ -1142,10 +1143,17 @@ static void tv_video_task(void *arg)
     RAM_AT(4);
     int w = s_pic_w, h = s_pic_h, decoded = 0, undecodable = 0;
     bool behind = false; // skipping to the next keyframe
-    int64_t dec_us = 0;
+    int64_t dec_us = 0, win_us = esp_timer_get_time();
+    uint32_t win_shown = 0;
     for (; !s_stop && n > AU_HEAD; n = next_au(au, true)) {
         int64_t pts;
         memcpy(&pts, au, 8);
+        int64_t now_us = esp_timer_get_time();
+        if (now_us - win_us >= 10000000) {
+            s_fps_recent = (s_shown - win_shown) * 1e6f / (now_us - win_us);
+            win_us = now_us;
+            win_shown = s_shown;
+        }
         if (s_first_pts < 0) {
             s_first_pts = pts;
         }
@@ -1325,7 +1333,7 @@ bool tv_play(const char *url, const char *title, bool live)
     s_start_us = esp_timer_get_time();
     s_shown = s_dropped = s_first_ms = 0;
     s_late_sum_ms = s_late_max_ms = 0;
-    s_decode_ms = s_draw_ms = s_fps = 0;
+    s_decode_ms = s_draw_ms = s_fps = s_fps_recent = 0;
     s_error[0] = s_draw_err[0] = '\0';
     s_why = "";
     s_pic_w = s_pic_h = 0;
@@ -1534,7 +1542,7 @@ void tv_status_json(char *out, size_t len)
     json_escape(title, sizeof(title), s_title);
     json_escape(err, sizeof(err), tv_error());
     snprintf(out, len,
-             "{\"title\":\"%s\",\"playing\":%s,\"live\":%s,\"busy\":%s,\"width\":%d,\"height\":%d,\"fps\":%.1f,"
+             "{\"title\":\"%s\",\"playing\":%s,\"live\":%s,\"busy\":%s,\"width\":%d,\"height\":%d,\"fps\":%.1f,\"fps_recent\":%.1f,"
              "\"shown\":%d,\"dropped\":%d,\"decode_ms\":%.1f,\"draw_ms\":%.1f,\"frame_convert_ms\":%.1f,\"frame_draw_ms\":%.1f,\"first_picture_ms\":%d,"
              "\"late_avg_ms\":%.1f,\"late_max_ms\":%d,\"restarts\":%u,\"epochs\":%u,\"skipped_to_idr\":%u,"
              "\"audio_gaps\":%u,\"audio_gap_ms\":%u,\"audio_late\":%u,\"late_decoded\":%u,\"starved\":%u,"
@@ -1543,7 +1551,7 @@ void tv_status_json(char *out, size_t len)
              "\"demux\":\"%s\",\"decoder\":\"%s\",\"drawer\":\"%s\",\"ram_now\":%u,\"ram_min\":%u,"
              "\"ended\":\"%s\",\"error\":\"%s\",\"source\":%s}",
              title, s_playing ? "true" : "false", s_live ? "true" : "false", s_busy ? "true" : "false", s_pic_w, s_pic_h,
-             s_fps, s_shown, s_dropped, s_decode_ms, s_draw_ms, s_frame_conv_ms, s_frame_draw_ms, s_first_ms, s_shown ? (float)s_late_sum_ms / s_shown : 0.0f,
+             s_fps, s_fps_recent, s_shown, s_dropped, s_decode_ms, s_draw_ms, s_frame_conv_ms, s_frame_draw_ms, s_first_ms, s_shown ? (float)s_late_sum_ms / s_shown : 0.0f,
              s_late_max_ms, (unsigned)s_restarts, (unsigned)s_epochs, (unsigned)s_skipped, (unsigned)s_audio_gaps,
              (unsigned)s_audio_gap_ms, (unsigned)s_audio_late, (unsigned)s_late_decoded, (unsigned)s_starved,
              (unsigned)s_cc_errors, (unsigned)s_packets, (unsigned)s_au_bytes, (int)s_lat_ms, (int)s_lat_min_ms,
